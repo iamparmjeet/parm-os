@@ -81,6 +81,11 @@ parm_install_user_config() {
     PARM_TARGET_HOME="$target_home" \
     "$PARM_SOURCE_DIR/migrations/omarchy-quattro/import"
 
+  if ((PARM_DRY_RUN)); then
+    parm_log "Wallpaper discovery and application skipped in dry-run mode"
+    return
+  fi
+
   local wallpaper
   wallpaper=$(jq -r '.appearance.wallpaper' "$config_dir/config.json")
   if ! parm_is_testing && [[ -f $wallpaper ]]; then
@@ -122,7 +127,10 @@ parm_write_install_manifest() {
     --arg installedAt "$(date --iso-8601=seconds)" \
     --arg source "$PARM_SOURCE_DIR" \
     '{schemaVersion:1, version:$version, installedAt:$installedAt, source:$source}')
-  if parm_is_testing; then
+  if ((PARM_DRY_RUN)); then
+    printf '%s\n' "$manifest" |
+      parm_write_root_file /var/lib/parm/install-manifest.json 0644
+  elif parm_is_testing; then
     mkdir -p -- "$(dirname -- "$target")"
     parm_atomic_json_write "$target" "$manifest"
   else

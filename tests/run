@@ -146,6 +146,20 @@ else
 fi
 mkdir -p "$fixture/sys/firmware/efi"
 
+dry_run_output=$(
+  PARM_TESTING=1 \
+  PARM_TEST_ROOT="$fixture" \
+  PARM_TARGET_USER=tester \
+  "$repo/setup" convert --dry-run --yes
+)
+if rg -q 'Backup planned:' <<<"$dry_run_output" &&
+  rg -q 'DRY-RUN:' <<<"$dry_run_output" &&
+  [[ ! -e $fixture/var/lib/parm ]]; then
+  pass "non-writing conversion dry-run"
+else
+  fail "non-writing conversion dry-run"
+fi
+
 if PARM_TESTING=1 \
   PARM_TEST_ROOT="$fixture" \
   PARM_TARGET_USER=tester \

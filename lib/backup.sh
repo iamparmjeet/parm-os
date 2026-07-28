@@ -38,6 +38,15 @@ parm_backup_create() {
     parm_run tar --zstd -C "$target_home" -cf "$archive" "${existing[@]}"
   fi
 
+  if ((PARM_DRY_RUN)); then
+    if ! parm_is_testing; then
+      printf 'DRY-RUN: pacman -Qqe > %q\n' "$backup_dir/packages-explicit.txt"
+      printf 'DRY-RUN: pacman -Qq > %q\n' "$backup_dir/packages-all.txt"
+    fi
+    parm_log "Backup planned: $backup_dir"
+    return
+  fi
+
   if ! parm_is_testing; then
     pacman -Qqe >"$backup_dir/packages-explicit.txt"
     pacman -Qq >"$backup_dir/packages-all.txt"
