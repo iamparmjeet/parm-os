@@ -31,12 +31,26 @@ virsh --connect "$connection" dominfo "$name" >/dev/null 2>&1 && {
   exit 1
 }
 
-printf 'Create QEMU VM %s with disk %s? [y/N] ' "$name" "$disk"
+resume=0
+if [[ -e $disk || -e $xml ]]; then
+  if [[ -f $disk && -f $xml ]]; then
+    resume=1
+    printf 'Resume registering QEMU VM %s with existing disk %s? [y/N] ' \
+      "$name" "$disk"
+  else
+    echo "Refusing incomplete VM state: disk and XML must either both exist or both be absent." >&2
+    exit 1
+  fi
+else
+  printf 'Create QEMU VM %s with disk %s? [y/N] ' "$name" "$disk"
+fi
 read -r answer
 [[ $answer == y || $answer == Y ]] || exit 0
 
 mkdir -p -- "$vm_dir"
-qemu-img create -f qcow2 "$disk" 80G
+if (( ! resume )); then
+  qemu-img create -f qcow2 "$disk" 80G
+fi
 
 sed \
   -e "s|@NAME@|$name|g" \

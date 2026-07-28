@@ -77,7 +77,9 @@ sed \
   -e 's|@ISO@|/tmp/omarchy-test.iso|g' \
   "$repo/tools/vm/qemu/domain.xml.in" >"$vm_xml"
 if xmllint --noout "$vm_xml" &&
-  virt-xml-validate "$vm_xml" >/dev/null; then
+  virt-xml-validate "$vm_xml" >/dev/null &&
+  rg -q '<interface type="user">' "$vm_xml" &&
+  ! rg -q 'blob="on"' "$vm_xml"; then
   pass "QEMU XML template"
 else
   fail "QEMU XML template"
