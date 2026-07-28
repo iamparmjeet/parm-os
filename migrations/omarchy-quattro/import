@@ -15,6 +15,7 @@ mkdir -p \
   "$hypr_config" \
   "$target_home/.config/alacritty" \
   "$target_home/.config/foot" \
+  "$target_home/.config/uwsm" \
   "$target_home/.local/share/parm/wallpapers"
 
 install -m 0644 "$source_dir/config/hypr/hyprland.lua" "$hypr_config/hyprland.lua"
@@ -70,18 +71,37 @@ font=JetBrainsMono Nerd Font:size=11
 pad=8x8
 EOF
 
+for uwsm_file in env default; do
+  destination="$target_home/.config/uwsm/$uwsm_file"
+  backup="$imported/uwsm-$uwsm_file.before-parm"
+  if [[ -f $destination ]] &&
+    ! grep -q "# BEGIN PARM UWSM" "$destination" &&
+    [[ ! -f $backup ]]; then
+    install -m 0644 "$destination" "$backup"
+  fi
+  install -m 0644 "$source_dir/config/uwsm/$uwsm_file" "$destination"
+done
+
 zprofile="$target_home/.zprofile"
 touch "$zprofile"
-if ! grep -q '# BEGIN PARM SESSION' "$zprofile"; then
-  cat >>"$zprofile" <<'EOF'
+profile_temp=$(mktemp --tmpdir="$target_home" .zprofile.XXXXXX)
+awk '
+  /^# BEGIN PARM SESSION$/ { managed = 1; next }
+  /^# END PARM SESSION$/ { managed = 0; next }
+  !managed { print }
+' "$zprofile" >"$profile_temp"
+cat >>"$profile_temp" <<'EOF'
 
 # BEGIN PARM SESSION
-if [[ -z ${WAYLAND_DISPLAY:-} && ${XDG_VTNR:-0} == 1 ]]; then
+_parm_tty=$(tty 2>/dev/null || true)
+if [[ -z ${WAYLAND_DISPLAY:-} && -z ${DISPLAY:-} ]] &&
+  [[ ${XDG_VTNR:-0} == 1 || $_parm_tty == /dev/tty1 ]]; then
   exec uwsm start -g -1 -e -D Hyprland hyprland.desktop
 fi
+unset _parm_tty
 # END PARM SESSION
 EOF
-fi
+mv -f -- "$profile_temp" "$zprofile"
 
 zshrc="$target_home/.zshrc"
 if [[ -f $zshrc ]] && grep -q 'OMARCHY_PATH/default/bash/fns' "$zshrc"; then

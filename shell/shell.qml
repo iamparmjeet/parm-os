@@ -107,6 +107,10 @@ ShellRoot {
     function ping(): string { return "pong" }
     function reloadTheme(): void { shell.reloadTheme() }
     function toggleLauncher(): void { shell.launcherVisible = !shell.launcherVisible }
+    function launcherState(): string {
+      return (shell.launcherVisible ? "visible" : "hidden")
+        + (launcherLoader.item ? ":loaded" : ":unloaded")
+    }
     function showSettings(): void { Quickshell.execDetached(["parmctl", "settings"]) }
   }
 
@@ -246,29 +250,298 @@ ShellRoot {
   }
 
   LazyLoader {
+    id: launcherLoader
     active: shell.launcherVisible
 
     PanelWindow {
       id: launcher
-      anchors.top: true
+      visible: true
+      screen: Quickshell.screens[0]
+      anchors {
+        top: true
+        bottom: true
+        left: true
+        right: true
+      }
       exclusionMode: ExclusionMode.Ignore
-      implicitWidth: 560
-      implicitHeight: 100
       color: "transparent"
+      WlrLayershell.namespace: "parm-launcher"
+      WlrLayershell.layer: WlrLayer.Overlay
+      WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
+
+      property var entries: []
+      property int selectedIndex: 0
+
+      function searchText(entry) {
+        return [
+          entry.name || "",
+          entry.genericName || "",
+          entry.comment || "",
+          entry.id || ""
+        ].join(" ").toLowerCase()
+      }
+
+      function score(entry, query) {
+        var name = String(entry.name || "").toLowerCase()
+        var id = String(entry.id || "").toLowerCase()
+        if (!query) return 0
+        if (name.indexOf(query) === 0) return 3000 - name.length
+        if (id.indexOf(query) === 0) return 2500 - id.length
+        var nameIndex = name.indexOf(query)
+        if (nameIndex >= 0) return 2000 - nameIndex
+        var searchIndex = searchText(entry).indexOf(query)
+        return searchIndex >= 0 ? 1000 - searchIndex : -1
+      }
+
+      function rebuild() {
+        var query = searchInput.text.trim().toLowerCase()
+        var applications = DesktopEntries.applications.values || []
+        var matches = []
+        for (var i = 0; i < applications.length; i++) {
+          var entry = applications[i]
+          if (!entry || entry.noDisplay || !entry.name) continue
+          var entryScore = score(entry, query)
+          if (entryScore >= 0)
+            matches.push({ entry: entry, score: entryScore })
+        }
+        matches.sort(function(left, right) {
+          if (query && left.score !== right.score)
+            return right.score - left.score
+          return String(left.entry.name).localeCompare(String(right.entry.name))
+        })
+        entries = matches.slice(0, 100).map(function(match) { return match.entry })
+        selectedIndex = entries.length === 0
+          ? 0
+          : Math.min(selectedIndex, entries.length - 1)
+        Qt.callLater(function() {
+          if (entries.length > 0)
+            results.positionViewAtIndex(selectedIndex, ListView.Contain)
+        })
+      }
+
+      function moveSelection(delta) {
+        if (entries.length === 0) return
+        selectedIndex = (selectedIndex + delta + entries.length) % entries.length
+        results.positionViewAtIndex(selectedIndex, ListView.Contain)
+      }
+
+      function close() {
+        shell.launcherVisible = false
+      }
+
+      function launch(index) {
+        var entry = entries[index]
+        if (!entry) return
+        close()
+        entry.execute()
+      }
+
+      function iconSource(icon) {
+        var value = String(icon || "")
+        if (value.indexOf("file://") === 0 || value.indexOf("image://") === 0)
+          return value
+        if (value.charAt(0) === "/")
+          return "file://" + value
+        var resolved = Quickshell.iconPath(value || "application-x-executable", true)
+        return resolved || Quickshell.iconPath("application-x-executable", true)
+      }
+
+      Component.onCompleted: {
+        rebuild()
+        Qt.callLater(function() { searchInput.forceActiveFocus() })
+      }
+
+      Connections {
+        target: DesktopEntries.applications
+        function onValuesChanged() { launcher.rebuild() }
+      }
 
       Rectangle {
         anchors.fill: parent
-        anchors.margins: 12
-        radius: 24
+        color: Qt.rgba(
+          shell.colors.background.r,
+          shell.colors.background.g,
+          shell.colors.background.b,
+          0.62
+        )
+      }
+
+      MouseArea {
+        anchors.fill: parent
+        onClicked: launcher.close()
+      }
+
+      Rectangle {
+        id: launcherCard
+        width: Math.min(640, launcher.width - 32)
+        height: Math.min(470, launcher.height - 64)
+        anchors.centerIn: parent
+        radius: 28
         color: shell.colors.surface_container
         border.width: 1
         border.color: shell.colors.outline
+        clip: true
 
-        Text {
-          anchors.centerIn: parent
-          text: "Parm launcher · application search arrives in the next shell revision"
-          color: shell.colors.on_surface
-          font.pixelSize: 15
+        MouseArea {
+          anchors.fill: parent
+          onClicked: {}
+        }
+
+        ColumnLayout {
+          anchors.fill: parent
+          anchors.margins: 18
+          spacing: 10
+
+          Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: 54
+            radius: 27
+            color: shell.colors.surface_container_high
+
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: 18
+              anchors.verticalCenter: parent.verticalCenter
+              text: "⌕"
+              color: shell.colors.primary
+              font.pixelSize: 25
+            }
+
+            TextInput {
+              id: searchInput
+              anchors {
+                left: parent.left
+                leftMargin: 52
+                right: parent.right
+                rightMargin: 18
+                verticalCenter: parent.verticalCenter
+              }
+              color: shell.colors.on_surface
+              selectionColor: shell.colors.primary
+              selectedTextColor: shell.colors.on_primary
+              font.pixelSize: 17
+              clip: true
+              onTextChanged: {
+                launcher.selectedIndex = 0
+                launcher.rebuild()
+              }
+
+              Text {
+                anchors.fill: parent
+                visible: !searchInput.text
+                text: "Search applications"
+                color: shell.colors.on_surface_variant
+                font: searchInput.font
+                verticalAlignment: Text.AlignVCenter
+              }
+
+              Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Escape) {
+                  launcher.close()
+                  event.accepted = true
+                } else if (event.key === Qt.Key_Down) {
+                  launcher.moveSelection(1)
+                  event.accepted = true
+                } else if (event.key === Qt.Key_Up) {
+                  launcher.moveSelection(-1)
+                  event.accepted = true
+                } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                  launcher.launch(launcher.selectedIndex)
+                  event.accepted = true
+                }
+              }
+            }
+          }
+
+          ListView {
+            id: results
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            model: launcher.entries
+            clip: true
+            spacing: 4
+            boundsBehavior: Flickable.StopAtBounds
+
+            delegate: Rectangle {
+              id: appRow
+              required property int index
+              required property var modelData
+              width: ListView.view.width
+              height: 58
+              radius: 16
+              color: index === launcher.selectedIndex
+                ? shell.colors.surface_container_high
+                : "transparent"
+
+              Image {
+                id: appIcon
+                anchors.left: parent.left
+                anchors.leftMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                width: 30
+                height: 30
+                source: launcher.iconSource(appRow.modelData.icon)
+                sourceSize.width: 30
+                sourceSize.height: 30
+                asynchronous: true
+                fillMode: Image.PreserveAspectFit
+              }
+
+              Column {
+                anchors.left: appIcon.right
+                anchors.leftMargin: 14
+                anchors.right: parent.right
+                anchors.rightMargin: 14
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 2
+
+                Text {
+                  width: parent.width
+                  text: appRow.modelData.name
+                  color: appRow.index === launcher.selectedIndex
+                    ? shell.colors.primary
+                    : shell.colors.on_surface
+                  font.pixelSize: 16
+                  font.weight: Font.Medium
+                  elide: Text.ElideRight
+                }
+
+                Text {
+                  width: parent.width
+                  visible: text.length > 0
+                  text: appRow.modelData.genericName || appRow.modelData.comment || ""
+                  color: shell.colors.on_surface_variant
+                  font.pixelSize: 12
+                  elide: Text.ElideRight
+                }
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onEntered: launcher.selectedIndex = appRow.index
+                onClicked: launcher.launch(appRow.index)
+              }
+            }
+          }
+
+          Text {
+            Layout.fillWidth: true
+            visible: launcher.entries.length === 0
+            text: "No applications found"
+            horizontalAlignment: Text.AlignHCenter
+            color: shell.colors.on_surface_variant
+            font.pixelSize: 15
+          }
+
+          Text {
+            Layout.fillWidth: true
+            text: "↑ ↓ navigate    Enter launch    Esc close"
+            horizontalAlignment: Text.AlignHCenter
+            color: shell.colors.on_surface_variant
+            font.pixelSize: 11
+          }
         }
       }
     }

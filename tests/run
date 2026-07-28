@@ -105,12 +105,18 @@ mkdir -p \
   "$fixture/.snapshots" \
   "$fixture/sys/firmware/efi" \
   "$fixture/usr/share/omarchy/shell" \
-  "$fixture/home/tester"
+  "$fixture/home/tester/.config/uwsm"
 touch \
   "$fixture/etc/arch-release" \
   "$fixture/boot/limine.conf" \
   "$fixture/usr/share/omarchy/shell/shell.qml"
 printf 'MZ' >"$fixture/boot/EFI/limine/limine_x64.efi"
+printf '%s\n' \
+  'export OMARCHY_PATH=$HOME/.local/share/omarchy' \
+  'omarchy-cmd-present mise && eval "$(mise activate bash --shims)"' \
+  >"$fixture/home/tester/.config/uwsm/env"
+printf 'export BROWSER=omarchy-launch-browser\n' \
+  >"$fixture/home/tester/.config/uwsm/default"
 printf '%s\n' \
   'TARGET_OS_NAME="Omarchy"' \
   'CUSTOM_UKI_NAME="omarchy"' \
@@ -194,10 +200,34 @@ if [[ -f $fixture/var/lib/parm/conversion-phase ]] &&
   [[ -f $fixture/etc/default/limine.parm-preconversion ]] &&
   rg -q '^TARGET_OS_NAME="Parm"$' "$fixture/etc/default/limine" &&
   rg -q '^CUSTOM_UKI_NAME="parm"$' "$fixture/etc/default/limine" &&
-  rg -q 'cryptdevice=PARTUUID=test:root' "$fixture/etc/default/limine"; then
+  rg -q 'cryptdevice=PARTUUID=test:root' "$fixture/etc/default/limine" &&
+  rg -q '/dev/tty1' "$fixture/home/tester/.zprofile" &&
+  rg -q '# BEGIN PARM UWSM ENV' "$fixture/home/tester/.config/uwsm/env" &&
+  rg -q 'OMARCHY_PATH' \
+    "$fixture/home/tester/.config/parm/imported/uwsm-env.before-parm" &&
+  ! rg -q 'OMARCHY_PATH|omarchy-' "$fixture/home/tester/.config/uwsm/env"; then
   pass "fixture installation outputs"
 else
   fail "fixture installation outputs"
+fi
+
+printf 'broken\n' >"$fixture/usr/share/parm/shell/shell.qml"
+if PARM_TESTING=1 \
+  PARM_TEST_ROOT="$fixture" \
+  PARM_TARGET_USER=tester \
+  "$repo/setup" repair --vm-test >/dev/null &&
+  cmp -s "$repo/shell/shell.qml" "$fixture/usr/share/parm/shell/shell.qml"; then
+  pass "repair restores product-owned files without reconversion"
+else
+  fail "repair restores product-owned files without reconversion"
+fi
+
+if rg -q 'DesktopEntries.applications' "$repo/shell/shell.qml" &&
+  rg -q 'entry\.execute\(\)' "$repo/shell/shell.qml" &&
+  ! rg -q 'application search arrives' "$repo/shell/shell.qml"; then
+  pass "native application launcher contract"
+else
+  fail "native application launcher contract"
 fi
 
 webhome="$fixture/webhome"

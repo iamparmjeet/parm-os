@@ -22,6 +22,8 @@ parm_install_product_files() {
     config/hypr/hypridle.conf
     config/hypr/hyprlock.conf
     config/hypr/overrides.lua
+    config/uwsm/env
+    config/uwsm/default
     packages/official.txt
     packages/aur.txt
     packages/retain.txt
@@ -169,7 +171,18 @@ parm_repair() {
   done
   (( missing == 0 )) || parm_die "Repair validation failed"
   jq empty "$PARM_SOURCE_DIR/config/default.json"
-  parm_log "Source tree is valid"
+  parm_require_vm_gate
+  parm_backup_create "pre-repair"
+  parm_install_product_files
+  parm_install_user_config
+  parm_install_system_units
+
+  if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] &&
+    command -v quickshell >/dev/null 2>&1; then
+    parm_run "$PARM_SOURCE_DIR/bin/parmctl" shell restart
+  fi
+
+  parm_log "Parm-owned files and session startup were repaired"
 }
 
 parm_uninstall() {

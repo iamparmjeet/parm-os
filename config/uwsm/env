@@ -1,0 +1,13 @@
+# BEGIN PARM UWSM ENV
+# Changes take effect on the next graphical login.
+export PATH="$HOME/.local/bin:$PATH"
+export XDG_MENU_PREFIX=arch-
+
+if [[ -f "$HOME/.config/uwsm/default" ]]; then
+  source "$HOME/.config/uwsm/default"
+fi
+
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate bash --shims)"
+fi
+# END PARM UWSM ENV

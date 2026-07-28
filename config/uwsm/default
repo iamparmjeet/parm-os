@@ -1,0 +1,5 @@
+# BEGIN PARM UWSM DEFAULTS
+export TERMINAL=alacritty
+export BROWSER=zen-browser
+export EDITOR=nvim
+# END PARM UWSM DEFAULTS

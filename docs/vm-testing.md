@@ -68,6 +68,20 @@ cat /var/lib/parm/conversion-phase
 
 Values progress from `staged` to `validated` to `complete`.
 
+## Repair an already converted VM
+
+After pulling a newer Parm checkout, restore product-owned files and session
+startup without repeating package conversion or bootloader setup:
+
+```bash
+./setup repair --vm-test
+```
+
+Repair first creates a `pre-repair` backup, preserves imported UWSM files under
+`~/.config/parm/imported/`, reinstalls the Parm shell and user configuration,
+and restarts the shell when run from Hyprland. Reboot once when the repair
+changes tty1 login startup.
+
 ## Snapshot names
 
 - `omarchy-3.8.4-clean`

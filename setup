@@ -21,10 +21,10 @@ Commands:
   install              Install Parm files beside Omarchy Quattro
   convert              Stage a complete Omarchy Quattro to Parm conversion
   update [version]     Update an existing Parm installation
-  repair               Validate and restore product-owned files
+  repair               Back up and restore Parm-owned files/session startup
   uninstall            Remove Parm after creating a configuration backup
 
-Conversion options:
+Mutation options:
   --vm-test            Required by pre-release builds
   --dry-run            Print planned actions without changing anything
   --yes                Accept the final confirmation non-interactively
