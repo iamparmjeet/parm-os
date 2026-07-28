@@ -154,6 +154,8 @@ dry_run_output=$(
 )
 if rg -q 'Backup planned:' <<<"$dry_run_output" &&
   rg -q 'DRY-RUN:' <<<"$dry_run_output" &&
+  rg -q 'No changes were made; do not reboot' <<<"$dry_run_output" &&
+  ! rg -q 'Parm is staged' <<<"$dry_run_output" &&
   [[ ! -e $fixture/var/lib/parm ]]; then
   pass "non-writing conversion dry-run"
 else

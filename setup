@@ -65,7 +65,11 @@ case "$command_name" in
     parm_assert_compatible
     parm_confirm_conversion
     parm_install_stage
-    parm_log "Parm is staged. Reboot to validate the Parm session."
+    if ((PARM_DRY_RUN)); then
+      parm_log "Dry-run completed. No changes were made; do not reboot."
+    else
+      parm_log "Parm is staged. Reboot to validate the Parm session."
+    fi
     ;;
   update)
     parm_update "${1:-latest}"
