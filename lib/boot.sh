@@ -1,5 +1,36 @@
 #!/bin/bash
 
+parm_boot_configure_limine_identity() {
+  local config backup temp
+  config=$(parm_root_path /etc/default/limine)
+  backup=$(parm_root_path /etc/default/limine.parm-preconversion)
+
+  [[ -f $config ]] ||
+    parm_die "Limine configuration is missing: /etc/default/limine"
+
+  if [[ ! -e $backup ]]; then
+    parm_run_root cp -a -- "$config" "$backup"
+  fi
+
+  temp=$(mktemp)
+  trap 'rm -f -- "$temp"' RETURN
+  awk '
+    /^[[:space:]]*(TARGET_OS_NAME|CUSTOM_UKI_NAME|ENABLE_UKI)[[:space:]]*=/ { next }
+    { print }
+    END {
+      print ""
+      print "# Managed by Parm after Omarchy conversion"
+      print "TARGET_OS_NAME=\"Parm\""
+      print "CUSTOM_UKI_NAME=\"parm\""
+      print "ENABLE_UKI=yes"
+    }
+  ' "$config" >"$temp"
+  parm_run_root install -m 0644 "$temp" "$config"
+  rm -f -- "$temp"
+  trap - RETURN
+  parm_log "Configured highest-priority Limine identity for Parm"
+}
+
 parm_boot_stage() {
   local defaults
   defaults='TARGET_OS_NAME="Parm"
@@ -21,15 +52,21 @@ SNAPSHOT_FORMAT_CHOICE=5
   printf '%s' "$getty_config" |
     parm_write_root_file /etc/systemd/system/getty@tty1.service.d/autologin.conf 0644
 
-  if parm_is_testing || (( PARM_DRY_RUN )); then
-    parm_log "UKI generation skipped in fixture/dry-run mode"
+  if ((PARM_DRY_RUN)); then
+    parm_log "Limine identity change and UKI generation skipped in dry-run mode"
+    return
+  fi
+
+  parm_boot_configure_limine_identity
+  if parm_is_testing; then
+    parm_log "UKI generation skipped in fixture mode"
     return
   fi
 
   command -v limine-mkinitcpio >/dev/null 2>&1 ||
     parm_die "limine-mkinitcpio is required"
   parm_run_root limine-mkinitcpio
-  [[ -f /boot/EFI/Linux/parm_linux.efi ]] ||
+  parm_root_test -s /boot/EFI/Linux/parm_linux.efi ||
     parm_die "Parm UKI was not generated"
 
   parm_run_root systemctl disable sddm.service

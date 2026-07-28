@@ -26,6 +26,11 @@ done
   exit 0
 }
 
+[[ -s /boot/EFI/Linux/parm_linux.efi ]] || {
+  echo "Parm UKI is missing or empty; leaving Omarchy untouched" >&2
+  exit 1
+}
+
 case "$phase" in
   staged)
     reflector \

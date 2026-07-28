@@ -99,6 +99,7 @@ fixture=$(mktemp -d)
 trap 'rm -rf -- "$fixture"' EXIT
 mkdir -p \
   "$fixture/etc" \
+  "$fixture/etc/default" \
   "$fixture/boot" \
   "$fixture/boot/EFI/limine" \
   "$fixture/.snapshots" \
@@ -110,6 +111,12 @@ touch \
   "$fixture/boot/limine.conf" \
   "$fixture/usr/share/omarchy/shell/shell.qml"
 printf 'MZ' >"$fixture/boot/EFI/limine/limine_x64.efi"
+printf '%s\n' \
+  'TARGET_OS_NAME="Omarchy"' \
+  'CUSTOM_UKI_NAME="omarchy"' \
+  'ENABLE_UKI=yes' \
+  'KERNEL_CMDLINE[default]+=" cryptdevice=PARTUUID=test:root root=/dev/mapper/root"' \
+  >"$fixture/etc/default/limine"
 
 report=$(
   PARM_TESTING=1 \
@@ -183,7 +190,11 @@ fi
 
 if [[ -f $fixture/var/lib/parm/conversion-phase ]] &&
   [[ $(<"$fixture/var/lib/parm/conversion-phase") == staged ]] &&
-  [[ -f $fixture/usr/share/parm/config/default.json ]]; then
+  [[ -f $fixture/usr/share/parm/config/default.json ]] &&
+  [[ -f $fixture/etc/default/limine.parm-preconversion ]] &&
+  rg -q '^TARGET_OS_NAME="Parm"$' "$fixture/etc/default/limine" &&
+  rg -q '^CUSTOM_UKI_NAME="parm"$' "$fixture/etc/default/limine" &&
+  rg -q 'cryptdevice=PARTUUID=test:root' "$fixture/etc/default/limine"; then
   pass "fixture installation outputs"
 else
   fail "fixture installation outputs"

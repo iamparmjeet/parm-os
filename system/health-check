@@ -33,7 +33,7 @@ check "WirePlumber" systemctl --user is-active wireplumber.service
 check "Hyprland portal" systemctl --user is-active xdg-desktop-portal-hyprland.service
 check "desktop portal" systemctl --user is-active xdg-desktop-portal.service
 check "idle manager" pgrep -x hypridle
-check "Parm UKI" test -f /boot/EFI/Linux/parm_linux.efi
+check "installation manifest" test -f /var/lib/parm/install-manifest.json
 
 if (( failed )); then
   echo "Parm health check failed; Omarchy will remain installed."
