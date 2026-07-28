@@ -1,0 +1,48 @@
+#!/bin/bash
+
+set -euo pipefail
+
+state_dir=${XDG_STATE_HOME:-$HOME/.local/state}/parm
+runtime_dir=${XDG_RUNTIME_DIR:-/run/user/$UID}/parm
+log="$state_dir/logs/health-check.log"
+
+mkdir -p -- "$state_dir/logs" "$runtime_dir"
+exec >>"$log" 2>&1
+
+echo "Parm session health check: $(date --iso-8601=seconds)"
+
+failed=0
+
+check() {
+  local label=$1
+  shift
+  if "$@" >/dev/null 2>&1; then
+    echo "ok: $label"
+  else
+    echo "failed: $label"
+    failed=1
+  fi
+}
+
+check "Hyprland" hyprctl version
+check "Parm shell" timeout 2 quickshell -p /usr/share/parm/shell ipc call -- parm.shell ping
+check "configuration" parmctl config validate
+check "NetworkManager" systemctl is-active NetworkManager.service
+check "PipeWire" systemctl --user is-active pipewire.service
+check "WirePlumber" systemctl --user is-active wireplumber.service
+check "Hyprland portal" systemctl --user is-active xdg-desktop-portal-hyprland.service
+check "desktop portal" systemctl --user is-active xdg-desktop-portal.service
+check "idle manager" pgrep -x hypridle
+check "Parm UKI" test -f /boot/EFI/Linux/parm_linux.efi
+
+if (( failed )); then
+  echo "Parm health check failed; Omarchy will remain installed."
+  exit 1
+fi
+
+sleep 300
+check "Parm shell after grace period" timeout 2 quickshell -p /usr/share/parm/shell ipc call -- parm.shell ping
+(( failed == 0 )) || exit 1
+
+cat /proc/sys/kernel/random/boot_id >"$runtime_dir/session-healthy"
+echo "Parm session is healthy."

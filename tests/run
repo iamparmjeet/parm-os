@@ -1,0 +1,167 @@
+#!/bin/bash
+
+set -euo pipefail
+
+repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+failures=0
+
+pass() {
+  printf 'PASS  %s\n' "$1"
+}
+
+fail() {
+  printf 'FAIL  %s\n' "$1" >&2
+  failures=$((failures + 1))
+}
+
+for script in \
+  "$repo/setup" \
+  "$repo/bin/parmctl" \
+  "$repo"/lib/*.sh \
+  "$repo/themes/apply" \
+  "$repo/migrations/omarchy-quattro/import" \
+  "$repo/system/health-check" \
+  "$repo/system/finalize" \
+  "$repo/tools/verify-host-untouched" \
+  "$repo/tools/vm/prepare-quattro" \
+  "$repo"/tools/vm/qemu/{create,snapshot} \
+  "$repo"/tools/vm/virtualbox/{create,snapshot}; do
+  if bash -n "$script"; then
+    pass "bash syntax: ${script#"$repo/"}"
+  else
+    fail "bash syntax: ${script#"$repo/"}"
+  fi
+done
+
+if jq empty "$repo/config/default.json" "$repo/config/config.schema.json"; then
+  pass "JSON syntax"
+else
+  fail "JSON syntax"
+fi
+
+if jq -e '
+  .schemaVersion == 1 and
+  (.appearance.mode | IN("auto", "light", "dark")) and
+  (.webapps | type == "array") and
+  (.keybindings | type == "array")
+' "$repo/config/default.json" >/dev/null; then
+  pass "default configuration contract"
+else
+  fail "default configuration contract"
+fi
+
+for lua in "$repo"/config/hypr/*.lua; do
+  if luac -p "$lua"; then
+    pass "Lua syntax: ${lua#"$repo/"}"
+  else
+    fail "Lua syntax: ${lua#"$repo/"}"
+  fi
+done
+
+vm_xml=$(mktemp)
+sed \
+  -e 's|@NAME@|parm-test|g' \
+  -e 's|@DISK@|/tmp/parm-test.qcow2|g' \
+  -e 's|@ISO@|/tmp/omarchy-test.iso|g' \
+  "$repo/tools/vm/qemu/domain.xml.in" >"$vm_xml"
+if xmllint --noout "$vm_xml" &&
+  virt-xml-validate "$vm_xml" >/dev/null; then
+  pass "QEMU XML template"
+else
+  fail "QEMU XML template"
+fi
+
+fixture=$(mktemp -d)
+trap 'rm -rf -- "$fixture"' EXIT
+mkdir -p \
+  "$fixture/etc" \
+  "$fixture/boot" \
+  "$fixture/.snapshots" \
+  "$fixture/usr/share/omarchy/shell" \
+  "$fixture/home/tester"
+touch \
+  "$fixture/etc/arch-release" \
+  "$fixture/boot/limine.conf" \
+  "$fixture/usr/share/omarchy/shell/shell.qml"
+
+report=$(
+  PARM_TESTING=1 \
+  PARM_TEST_ROOT="$fixture" \
+  PARM_TARGET_USER=tester \
+  "$repo/setup" inspect --json
+)
+if jq -e '.compatible and .omarchyQuattro and .virtualization == "test-fixture"' <<<"$report" >/dev/null; then
+  pass "Quattro fixture inspection"
+else
+  fail "Quattro fixture inspection"
+fi
+
+if PARM_TESTING=1 \
+  PARM_TEST_ROOT="$fixture" \
+  PARM_TARGET_USER=tester \
+  "$repo/setup" convert --yes >/dev/null; then
+  pass "isolated fixture conversion"
+else
+  fail "isolated fixture conversion"
+fi
+
+if [[ -f $fixture/var/lib/parm/conversion-phase ]] &&
+  [[ $(<"$fixture/var/lib/parm/conversion-phase") == staged ]] &&
+  [[ -f $fixture/usr/share/parm/config/default.json ]]; then
+  pass "fixture installation outputs"
+else
+  fail "fixture installation outputs"
+fi
+
+webhome="$fixture/webhome"
+mkdir -p "$webhome/.config/parm"
+install -m 0644 "$repo/config/default.json" "$webhome/.config/parm/config.json"
+if HOME="$webhome" \
+  PARM_SHARE="$repo" \
+  PARM_CONFIG="$webhome/.config/parm/config.json" \
+  "$repo/bin/parmctl" webapp add test-app "Test App" https://example.com &&
+  jq -e '.webapps[] | select(.id == "test-app")' "$webhome/.config/parm/config.json" >/dev/null &&
+  [[ -f $webhome/.local/share/applications/parm-webapp-test-app.desktop ]]; then
+  pass "webapp add and desktop entry"
+else
+  fail "webapp add and desktop entry"
+fi
+
+if HOME="$webhome" \
+  PARM_SHARE="$repo" \
+  PARM_CONFIG="$webhome/.config/parm/config.json" \
+  "$repo/bin/parmctl" webapp edit test-app enabled false &&
+  [[ ! -f $webhome/.local/share/applications/parm-webapp-test-app.desktop ]]; then
+  pass "webapp edit and desktop removal"
+else
+  fail "webapp edit and desktop removal"
+fi
+
+HOME="$webhome" \
+  PARM_SHARE="$repo" \
+  PARM_CONFIG="$webhome/.config/parm/config.json" \
+  "$repo/bin/parmctl" webapp remove test-app
+if ! jq -e '.webapps[] | select(.id == "test-app")' "$webhome/.config/parm/config.json" >/dev/null; then
+  pass "webapp removal"
+else
+  fail "webapp removal"
+fi
+
+if PARM_TESTING=1 PARM_TEST_ROOT=/ "$repo/setup" inspect >/dev/null 2>&1; then
+  fail "unsafe test root rejection"
+else
+  pass "unsafe test root rejection"
+fi
+
+if rg -n -i 'ai.sidebar|model-usage|openai|anthropic' "$repo/shell" "$repo/settings" >/dev/null; then
+  fail "AI surface exclusion"
+else
+  pass "AI surface exclusion"
+fi
+
+if ((failures)); then
+  printf '\n%d test(s) failed.\n' "$failures" >&2
+  exit 1
+fi
+
+printf '\nAll Parm tests passed.\n'

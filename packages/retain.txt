@@ -1,0 +1,17 @@
+base
+base-devel
+linux
+linux-firmware
+linux-headers
+intel-ucode
+amd-ucode
+cryptsetup
+btrfs-progs
+limine
+snapper
+networkmanager
+hyprland
+uwsm
+quickshell
+pipewire
+wireplumber

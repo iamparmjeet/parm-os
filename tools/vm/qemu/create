@@ -1,0 +1,50 @@
+#!/bin/bash
+
+set -euo pipefail
+
+name=${1:-parm-qemu}
+iso=${2:-$HOME/Downloads/omarchy-3.8.4.iso}
+vm_dir=${PARM_VM_DIR:-$HOME/VMs/parm}
+disk="$vm_dir/$name.qcow2"
+xml="$vm_dir/$name.xml"
+
+[[ $name =~ ^[a-zA-Z0-9._-]+$ ]] || {
+  echo "Invalid VM name: $name" >&2
+  exit 1
+}
+[[ -f $iso ]] || {
+  echo "Omarchy ISO not found: $iso" >&2
+  exit 1
+}
+virsh domcapabilities --virttype kvm 2>/dev/null |
+  grep -q '<value>efi</value>' || {
+  echo "libvirt does not report usable EFI firmware." >&2
+  exit 1
+}
+systemctl is-active libvirtd.service >/dev/null 2>&1 || {
+  echo "libvirtd is not active. Start it explicitly before creating the VM." >&2
+  exit 1
+}
+virsh dominfo "$name" >/dev/null 2>&1 && {
+  echo "VM already exists: $name" >&2
+  exit 1
+}
+
+printf 'Create QEMU VM %s with disk %s? [y/N] ' "$name" "$disk"
+read -r answer
+[[ $answer == y || $answer == Y ]] || exit 0
+
+mkdir -p -- "$vm_dir"
+qemu-img create -f qcow2 "$disk" 80G
+
+sed \
+  -e "s|@NAME@|$name|g" \
+  -e "s|@DISK@|$disk|g" \
+  -e "s|@ISO@|$iso|g" \
+  "$(dirname -- "$0")/domain.xml.in" >"$xml"
+
+xmllint --noout "$xml"
+virsh define "$xml"
+virsh start "$name"
+
+echo "Created $name. Open it with your preferred SPICE viewer."

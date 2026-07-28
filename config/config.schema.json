@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iamparmjeet/parm/config.schema.json",
+  "title": "Parm configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "appearance",
+    "shell",
+    "display",
+    "input",
+    "keybindings",
+    "power",
+    "login",
+    "webapps",
+    "development",
+    "updates",
+    "recovery"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "appearance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wallpaper", "mode", "lightAt", "darkAt", "timezone"],
+      "properties": {
+        "wallpaper": { "type": "string" },
+        "mode": { "enum": ["auto", "light", "dark"] },
+        "lightAt": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+        "darkAt": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
+        "timezone": { "type": "string", "minLength": 1 },
+        "scheme": {
+          "enum": [
+            "scheme-tonal-spot",
+            "scheme-content",
+            "scheme-expressive",
+            "scheme-fidelity",
+            "scheme-neutral",
+            "scheme-vibrant"
+          ]
+        },
+        "contrast": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "shell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bar", "weather", "optionalModules"],
+      "properties": {
+        "bar": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["position", "height", "clockFormat"],
+          "properties": {
+            "position": { "enum": ["top", "bottom"] },
+            "height": { "type": "integer", "minimum": 32, "maximum": 64 },
+            "clockFormat": { "type": "string", "minLength": 1 }
+          }
+        },
+        "weather": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "location"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "location": { "type": "string" }
+          }
+        },
+        "optionalModules": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tailscale", "dropbox"],
+          "properties": {
+            "tailscale": { "type": "boolean" },
+            "dropbox": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["monitors"],
+      "properties": {
+        "monitors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "mode", "position", "scale", "enabled"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "mode": { "type": "string", "minLength": 1 },
+              "position": { "type": "string", "pattern": "^-?[0-9]+x-?[0-9]+$" },
+              "scale": { "type": "number", "exclusiveMinimum": 0 },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keyboardLayout", "naturalScroll", "touchpadSpeed"],
+      "properties": {
+        "keyboardLayout": { "type": "string", "minLength": 1 },
+        "naturalScroll": { "type": "boolean" },
+        "touchpadSpeed": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "keybindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["keys", "label", "command", "enabled"],
+        "properties": {
+          "keys": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "command": { "type": "string", "minLength": 1 },
+          "enabled": { "type": "boolean" }
+        }
+      }
+    },
+    "power": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["screensaverSeconds", "lockSeconds", "profile"],
+      "properties": {
+        "screensaverSeconds": { "type": "integer", "minimum": 0 },
+        "lockSeconds": { "type": "integer", "minimum": 0 },
+        "profile": { "enum": ["power-saver", "balanced", "performance"] }
+      }
+    },
+    "login": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ttyAutologin", "user"],
+      "properties": {
+        "ttyAutologin": { "type": "boolean" },
+        "user": { "type": "string" }
+      }
+    },
+    "webapps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "url", "icon", "keybinding", "enabled"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "name": { "type": "string", "minLength": 1 },
+          "url": { "type": "string", "pattern": "^https?://" },
+          "icon": { "type": "string" },
+          "keybinding": { "type": "string" },
+          "enabled": { "type": "boolean" }
+        }
+      }
+    },
+    "development": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mise", "dockerEnabled"],
+      "properties": {
+        "mise": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "dockerEnabled": { "type": "boolean" }
+      }
+    },
+    "updates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel", "automaticCheck"],
+      "properties": {
+        "channel": { "const": "stable" },
+        "automaticCheck": { "type": "boolean" }
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["configBackups", "snapperSnapshots"],
+      "properties": {
+        "configBackups": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "snapperSnapshots": { "type": "integer", "minimum": 1, "maximum": 20 }
+      }
+    }
+  }
+}

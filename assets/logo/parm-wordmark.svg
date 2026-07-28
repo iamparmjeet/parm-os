@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 220" role="img" aria-labelledby="title">
+  <title id="title">Parm wordmark</title>
+  <rect x="10" y="10" width="200" height="200" rx="54" fill="#6750A4"/>
+  <text x="42" y="58" fill="#FFFFFF" font-family="Inter, sans-serif" font-size="24" font-weight="600">00</text>
+  <text x="110" y="145" fill="#FFFFFF" font-family="Inter, sans-serif" font-size="72" font-weight="650" text-anchor="middle">Pm</text>
+  <text x="250" y="145" fill="#1D1B20" font-family="Inter, sans-serif" font-size="104" font-weight="650">Parm</text>
+</svg>

@@ -1,0 +1,306 @@
+#!/bin/bash
+
+set -euo pipefail
+
+mode=${1:-dark}
+[[ $mode == light || $mode == dark ]] || {
+  echo "theme mode must be light or dark" >&2
+  exit 2
+}
+
+config=${PARM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/parm/config.json}
+cache=${PARM_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/parm/themes}
+wallpaper=$(jq -r '.appearance.wallpaper' "$config")
+scheme=$(jq -r '.appearance.scheme // "scheme-tonal-spot"' "$config")
+contrast=$(jq -r '.appearance.contrast // 0' "$config")
+
+[[ -f $wallpaper ]] || {
+  echo "No valid wallpaper is configured: $wallpaper" >&2
+  exit 1
+}
+
+mkdir -p -- "$cache"
+hash=$(sha256sum "$wallpaper" | cut -d' ' -f1)
+target="$cache/$hash-$mode"
+staging=$(mktemp -d --tmpdir="$cache" .theme.XXXXXX)
+trap 'rm -rf -- "$staging"' EXIT
+
+matugen image "$wallpaper" \
+  --mode "$mode" \
+  --type "$scheme" \
+  --contrast "$contrast" \
+  --source-color-index 0 \
+  --json hex >"$staging/matugen.json"
+
+jq --arg mode "$mode" '
+  .colors
+  | with_entries(.value = .value[$mode].color)
+  | .mode = $mode
+' "$staging/matugen.json" >"$staging/colors.json"
+
+color() {
+  jq -r --arg key "$1" '.[$key]' "$staging/colors.json"
+}
+
+primary=$(color primary)
+on_primary=$(color on_primary)
+background=$(color background)
+on_background=$(color on_background)
+surface=$(color surface)
+surface_container=$(color surface_container)
+surface_high=$(color surface_container_high)
+on_surface=$(color on_surface)
+on_surface_variant=$(color on_surface_variant)
+outline=$(color outline)
+error=$(color error)
+secondary=$(color secondary)
+tertiary=$(color tertiary)
+
+cat >"$staging/alacritty.toml" <<EOF
+[colors.primary]
+background = "$background"
+foreground = "$on_background"
+
+[colors.normal]
+black = "$surface"
+red = "$error"
+green = "$tertiary"
+yellow = "$secondary"
+blue = "$primary"
+magenta = "$tertiary"
+cyan = "$secondary"
+white = "$on_surface"
+
+[colors.bright]
+black = "$outline"
+red = "$error"
+green = "$tertiary"
+yellow = "$secondary"
+blue = "$primary"
+magenta = "$tertiary"
+cyan = "$secondary"
+white = "$on_background"
+EOF
+
+cat >"$staging/foot.ini" <<EOF
+[colors]
+background=${background#\#}
+foreground=${on_background#\#}
+regular0=${surface#\#}
+regular1=${error#\#}
+regular2=${tertiary#\#}
+regular3=${secondary#\#}
+regular4=${primary#\#}
+regular5=${tertiary#\#}
+regular6=${secondary#\#}
+regular7=${on_surface#\#}
+bright0=${outline#\#}
+bright1=${error#\#}
+bright2=${tertiary#\#}
+bright3=${secondary#\#}
+bright4=${primary#\#}
+bright5=${tertiary#\#}
+bright6=${secondary#\#}
+bright7=${on_background#\#}
+EOF
+
+cat >"$staging/Parm.colors" <<EOF
+[ColorEffects:Disabled]
+Color=$on_surface_variant
+ColorAmount=0
+ColorEffect=0
+ContrastAmount=0.65
+ContrastEffect=1
+IntensityAmount=0.1
+IntensityEffect=2
+
+[Colors:Button]
+BackgroundNormal=$surface_container
+BackgroundAlternate=$surface_high
+ForegroundNormal=$on_surface
+ForegroundInactive=$on_surface_variant
+ForegroundActive=$primary
+ForegroundLink=$primary
+ForegroundVisited=$tertiary
+ForegroundNegative=$error
+ForegroundNeutral=$secondary
+ForegroundPositive=$tertiary
+DecorationFocus=$primary
+DecorationHover=$secondary
+
+[Colors:Selection]
+BackgroundNormal=$primary
+BackgroundAlternate=$secondary
+ForegroundNormal=$on_primary
+ForegroundInactive=$on_primary
+ForegroundActive=$on_primary
+ForegroundLink=$on_primary
+ForegroundVisited=$on_primary
+ForegroundNegative=$error
+ForegroundNeutral=$secondary
+ForegroundPositive=$tertiary
+DecorationFocus=$primary
+DecorationHover=$secondary
+
+[Colors:Tooltip]
+BackgroundNormal=$surface_high
+BackgroundAlternate=$surface_container
+ForegroundNormal=$on_surface
+ForegroundInactive=$on_surface_variant
+ForegroundActive=$primary
+ForegroundLink=$primary
+ForegroundVisited=$tertiary
+ForegroundNegative=$error
+ForegroundNeutral=$secondary
+ForegroundPositive=$tertiary
+DecorationFocus=$primary
+DecorationHover=$secondary
+
+[Colors:View]
+BackgroundNormal=$surface
+BackgroundAlternate=$surface_container
+ForegroundNormal=$on_surface
+ForegroundInactive=$on_surface_variant
+ForegroundActive=$primary
+ForegroundLink=$primary
+ForegroundVisited=$tertiary
+ForegroundNegative=$error
+ForegroundNeutral=$secondary
+ForegroundPositive=$tertiary
+DecorationFocus=$primary
+DecorationHover=$secondary
+
+[Colors:Window]
+BackgroundNormal=$background
+BackgroundAlternate=$surface
+ForegroundNormal=$on_background
+ForegroundInactive=$on_surface_variant
+ForegroundActive=$primary
+ForegroundLink=$primary
+ForegroundVisited=$tertiary
+ForegroundNegative=$error
+ForegroundNeutral=$secondary
+ForegroundPositive=$tertiary
+DecorationFocus=$primary
+DecorationHover=$secondary
+
+[General]
+ColorScheme=Parm
+Name=Parm
+shadeSortColumn=true
+
+[KDE]
+contrast=4
+
+[WM]
+activeBackground=$background
+activeForeground=$on_background
+inactiveBackground=$surface
+inactiveForeground=$on_surface_variant
+EOF
+
+cat >"$staging/kdeglobals" <<EOF
+[General]
+ColorScheme=Parm
+Name=Parm
+widgetStyle=Breeze
+
+[Icons]
+Theme=breeze
+
+[KDE]
+LookAndFeelPackage=org.kde.breeze.desktop
+SingleClick=false
+
+[WM]
+activeBackground=$background
+activeForeground=$on_background
+inactiveBackground=$surface
+inactiveForeground=$on_surface_variant
+EOF
+
+cat >"$staging/Parm.theme" <<EOF
+{
+  "metadata": {
+    "name": "Parm",
+    "revision": 1
+  },
+  "editor-colors": {
+    "BackgroundColor": "$surface",
+    "TextSelection": "$primary",
+    "CurrentLine": "$surface_container",
+    "BracketMatching": "$secondary",
+    "WordWrapMarker": "$outline",
+    "TabMarker": "$outline"
+  },
+  "text-styles": {
+    "Normal": { "text-color": "$on_surface", "selected-text-color": "$on_primary" },
+    "Keyword": { "text-color": "$primary", "bold": true },
+    "Function": { "text-color": "$secondary" },
+    "Variable": { "text-color": "$on_surface" },
+    "String": { "text-color": "$tertiary" },
+    "Comment": { "text-color": "$on_surface_variant", "italic": true },
+    "Error": { "text-color": "$error", "underline": true }
+  }
+}
+EOF
+
+cat >"$staging/gtk.css" <<EOF
+@define-color accent_color $primary;
+@define-color accent_bg_color $primary;
+@define-color accent_fg_color $on_primary;
+@define-color window_bg_color $background;
+@define-color window_fg_color $on_background;
+@define-color view_bg_color $surface;
+@define-color view_fg_color $on_surface;
+EOF
+
+cat >"$staging/hyprland.lua" <<EOF
+hl.config({
+  general = {
+    col = {
+      active_border = "rgb(${primary#\#})",
+      inactive_border = "rgb(${outline#\#})",
+    },
+  },
+})
+EOF
+
+cat >"$staging/hyprlock-colors.conf" <<EOF
+\$wallpaper = $wallpaper
+\$background = rgb(${background#\#})
+\$surface = rgb(${surface#\#})
+\$on_surface = rgb(${on_surface#\#})
+\$primary = rgb(${primary#\#})
+EOF
+
+jq empty "$staging/colors.json"
+if [[ -d $target ]]; then
+  rm -rf -- "$staging"
+else
+  mv -- "$staging" "$target"
+  trap - EXIT
+fi
+
+link="$cache/.current.$BASHPID"
+ln -s -- "$target" "$link"
+mv -Tf -- "$link" "$cache/current"
+
+mkdir -p \
+  "$HOME/.config/alacritty/themes" \
+  "$HOME/.config/foot" \
+  "$HOME/.local/share/color-schemes" \
+  "$HOME/.local/share/org.kde.syntax-highlighting/themes" \
+  "$HOME/.config/gtk-4.0"
+
+install -m 0644 "$target/alacritty.toml" "$HOME/.config/alacritty/themes/parm.toml"
+install -m 0644 "$target/foot.ini" "$HOME/.config/foot/parm-theme.ini"
+install -m 0644 "$target/Parm.colors" "$HOME/.local/share/color-schemes/Parm.colors"
+install -m 0644 "$target/kdeglobals" "$HOME/.config/kdeglobals"
+install -m 0644 "$target/Parm.theme" "$HOME/.local/share/org.kde.syntax-highlighting/themes/Parm.theme"
+install -m 0644 "$target/gtk.css" "$HOME/.config/gtk-4.0/gtk.css"
+
+hyprctl reload >/dev/null 2>&1 || true
+quickshell -p /usr/share/parm/shell ipc call -- parm.shell reloadTheme >/dev/null 2>&1 || true
+
+echo "Applied Parm $mode theme from $wallpaper"

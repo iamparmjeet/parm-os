@@ -1,0 +1,99 @@
+#!/bin/bash
+
+set -euo pipefail
+
+[[ $(systemd-detect-virt --vm 2>/dev/null || true) =~ ^(kvm|qemu|oracle)$ ]] || {
+  echo "Refusing pre-release finalization outside a supported VM" >&2
+  exit 1
+}
+
+source /etc/parm/install.env
+
+phase_file=/var/lib/parm/conversion-phase
+phase=$(cat "$phase_file" 2>/dev/null || echo unknown)
+marker="/run/user/$PARM_TARGET_UID/parm/session-healthy"
+current_boot=$(cat /proc/sys/kernel/random/boot_id)
+
+for _ in {1..180}; do
+  if [[ -f $marker ]] && [[ $(cat "$marker") == "$current_boot" ]]; then
+    break
+  fi
+  sleep 2
+done
+
+[[ -f $marker ]] && [[ $(cat "$marker") == "$current_boot" ]] || {
+  echo "No healthy Parm marker; leaving Omarchy untouched"
+  exit 0
+}
+
+case "$phase" in
+  staged)
+    reflector \
+      --country India,Singapore \
+      --protocol https \
+      --latest 20 \
+      --sort rate \
+      --save /etc/pacman.d/mirrorlist
+
+    temp=$(mktemp)
+    awk '
+      BEGIN { in_omarchy = 0 }
+      /^[[:space:]]*\[omarchy\][[:space:]]*$/ { in_omarchy = 1; next }
+      /^[[:space:]]*\[/ { in_omarchy = 0 }
+      !in_omarchy { print }
+    ' /etc/pacman.conf >"$temp"
+    install -m 0644 "$temp" /etc/pacman.conf
+    rm -f -- "$temp"
+    pacman -Sy
+
+    mapfile -t removals < <(
+      sed -E '/^[[:space:]]*(#|$)/d' /usr/share/parm/packages/remove.txt |
+        while read -r package_name; do
+          pacman -Q "$package_name" >/dev/null 2>&1 && printf '%s\n' "$package_name"
+        done
+    )
+    if ((${#removals[@]})); then
+      pacman -R --noconfirm "${removals[@]}"
+    fi
+
+    systemctl disable sddm.service >/dev/null 2>&1 || true
+    systemctl unmask getty@tty1.service
+    systemctl enable getty@tty1.service
+
+    retired="$PARM_TARGET_HOME/.local/state/parm/retired-omarchy"
+    install -d -o "$PARM_TARGET_USER" -g "$PARM_TARGET_USER" "$retired"
+    if [[ -e $PARM_TARGET_HOME/.config/omarchy ]]; then
+      mv -- "$PARM_TARGET_HOME/.config/omarchy" "$retired/config"
+    fi
+    if [[ -e $PARM_TARGET_HOME/.local/share/omarchy ]]; then
+      mv -- "$PARM_TARGET_HOME/.local/share/omarchy" "$retired/source"
+    fi
+
+    rm -f \
+      /etc/profile.d/omarchy.sh \
+      /etc/sddm.conf.d/10-theme.conf \
+      /etc/sddm.conf.d/10-wayland.conf \
+      /etc/sddm.conf.d/99-omarchy-login.conf \
+      /etc/sddm.conf.d/autologin.conf
+
+    printf '%s\n' "$current_boot" >/var/lib/parm/first-healthy-boot
+    printf 'validated\n' >"$phase_file"
+    limine-mkinitcpio
+    ;;
+  validated)
+    first_boot=$(cat /var/lib/parm/first-healthy-boot 2>/dev/null || true)
+    [[ -n $first_boot && $first_boot != "$current_boot" ]] || exit 0
+
+    rm -f /boot/EFI/Linux/omarchy_linux.efi
+    limine-mkinitcpio
+    printf 'complete\n' >"$phase_file"
+    systemctl disable parm-finalize.service
+    ;;
+  complete)
+    systemctl disable parm-finalize.service
+    ;;
+  *)
+    echo "Unknown Parm conversion phase: $phase" >&2
+    exit 1
+    ;;
+esac

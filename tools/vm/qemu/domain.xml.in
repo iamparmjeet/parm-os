@@ -1,0 +1,51 @@
+<domain type="kvm">
+  <name>@NAME@</name>
+  <memory unit="MiB">8192</memory>
+  <currentMemory unit="MiB">8192</currentMemory>
+  <vcpu placement="static">4</vcpu>
+  <os firmware="efi">
+    <type arch="x86_64" machine="q35">hvm</type>
+    <firmware>
+      <feature enabled="no" name="secure-boot"/>
+    </firmware>
+    <boot dev="cdrom"/>
+    <boot dev="hd"/>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+  </features>
+  <cpu mode="host-passthrough" check="none"/>
+  <clock offset="utc"/>
+  <devices>
+    <emulator>/usr/bin/qemu-system-x86_64</emulator>
+    <disk type="file" device="disk">
+      <driver name="qemu" type="qcow2" discard="unmap"/>
+      <source file="@DISK@"/>
+      <target dev="vda" bus="virtio"/>
+    </disk>
+    <disk type="file" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source file="@ISO@"/>
+      <target dev="sda" bus="sata"/>
+      <readonly/>
+    </disk>
+    <interface type="network">
+      <source network="default"/>
+      <model type="virtio"/>
+    </interface>
+    <graphics type="spice" autoport="yes">
+      <listen type="address"/>
+      <gl enable="yes"/>
+    </graphics>
+    <video>
+      <model type="virtio" heads="1" primary="yes" blob="on"/>
+    </video>
+    <channel type="spicevmc">
+      <target type="virtio" name="com.redhat.spice.0"/>
+    </channel>
+    <input type="tablet" bus="usb"/>
+    <input type="keyboard" bus="usb"/>
+    <sound model="ich9"/>
+  </devices>
+</domain>

@@ -1,0 +1,12 @@
+[Unit]
+Description=Finalize a healthy Parm VM conversion
+After=multi-user.target
+ConditionPathExists=/var/lib/parm/conversion-phase
+
+[Service]
+Type=oneshot
+ExecStart=/usr/share/parm/system/finalize
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=multi-user.target
