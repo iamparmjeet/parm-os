@@ -90,6 +90,7 @@ trap 'rm -rf -- "$fixture"' EXIT
 mkdir -p \
   "$fixture/etc" \
   "$fixture/boot" \
+  "$fixture/boot/EFI/limine" \
   "$fixture/.snapshots" \
   "$fixture/sys/firmware/efi" \
   "$fixture/usr/share/omarchy/shell" \
@@ -98,6 +99,7 @@ touch \
   "$fixture/etc/arch-release" \
   "$fixture/boot/limine.conf" \
   "$fixture/usr/share/omarchy/shell/shell.qml"
+printf 'MZ' >"$fixture/boot/EFI/limine/limine_x64.efi"
 
 report=$(
   PARM_TESTING=1 \
@@ -109,6 +111,7 @@ if jq -e '
   .compatible and
   .omarchyQuattro and
   .bootMounted and
+  .limineEfi and
   .firmware == "uefi" and
   .virtualization == "test-fixture"
 ' <<<"$report" >/dev/null; then
