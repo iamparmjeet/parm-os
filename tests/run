@@ -45,6 +45,17 @@ else
   fail "safe package-backed Quattro migration contract"
 fi
 
+if rg -q \
+  'pacman -S --needed --noconfirm --ask 4' \
+  "$repo/lib/packages.sh" &&
+  rg -q \
+    'yay -S --needed --noconfirm --ask 4' \
+    "$repo/lib/packages.sh"; then
+  pass "atomic package-provider replacement contract"
+else
+  fail "atomic package-provider replacement contract"
+fi
+
 if jq empty "$repo/config/default.json" "$repo/config/config.schema.json"; then
   pass "JSON syntax"
 else
