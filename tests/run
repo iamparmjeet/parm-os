@@ -23,6 +23,7 @@ for script in \
   "$repo/system/health-check" \
   "$repo/system/finalize" \
   "$repo/tools/verify-host-untouched" \
+  "$repo/tools/migrate-omarchy-3.8.4-to-quattro" \
   "$repo/tools/vm/prepare-quattro" \
   "$repo"/tools/vm/qemu/{create,snapshot} \
   "$repo"/tools/vm/virtualbox/{create,snapshot}; do
@@ -32,6 +33,17 @@ for script in \
     fail "bash syntax: ${script#"$repo/"}"
   fi
 done
+
+migration_script="$repo/tools/migrate-omarchy-3.8.4-to-quattro"
+migration_args=$(sed -n '/^upgrade_args=(/,/^)/p' "$migration_script")
+if rg -q -- 'UPGRADER_COMMIT=9b693cca63d111fc3faba16aea149d226881b427' \
+  "$migration_script" &&
+  rg -q -- '^[[:space:]]+--channel edge$' <<<"$migration_args" &&
+  ! rg -q -- '--dev' <<<"$migration_args"; then
+  pass "safe package-backed Quattro migration contract"
+else
+  fail "safe package-backed Quattro migration contract"
+fi
 
 if jq empty "$repo/config/default.json" "$repo/config/config.schema.json"; then
   pass "JSON syntax"

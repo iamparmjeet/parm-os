@@ -6,11 +6,29 @@ Install `/home/parm/Downloads/omarchy-3.8.4.iso`, complete the encrypted Btrfs
 installation, then run:
 
 ```bash
+./tools/vm/prepare-quattro --inspect
 ./tools/vm/prepare-quattro
 ```
 
-After reboot, confirm that Quickshell and Lua Hyprland configuration are
-active. Take a snapshot named `omarchy-quattro-golden`.
+The helper uses the official migration script and installs package-backed
+Quattro from the edge repository. It does not use `--dev`, clone into
+`~/.local/share`, or replace `~/.config`. It creates:
+
+- a Snapper snapshot;
+- package inventories and selected user/system configuration archives under
+  `~/.local/state/omarchy/quattro-wrapper-backups/`.
+
+When the official migration asks whether to reboot, answer **No** so the
+wrapper can verify the resulting package and directory layout. Reboot only
+after those checks pass. Confirm that Quickshell and Lua Hyprland
+configuration are active, then take a snapshot named
+`omarchy-quattro-golden`.
+
+If migration or validation fails, keep the VM powered off until you have taken
+a VM snapshot of the failed state. Then either restore the pre-migration VM
+snapshot or use `omarchy-snapshot restore` to select the wrapper-created
+Snapper snapshot. Treat the archives as inspection/recovery material; do not
+extract an entire old `.config` tree over Quattro.
 
 ## Parm conversion
 

@@ -2,39 +2,5 @@
 
 set -euo pipefail
 
-commit=0526ebefccf6e58fb2cc9419070f1b5aff4b2df2
-expected_sha256=45bddccea554f08275031fc516dad62397d2d939870608f0f4848bc1c71116f1
-url="https://raw.githubusercontent.com/basecamp/omarchy/$commit/bin/omarchy-upgrade-to-quattro"
-
-virt=$(systemd-detect-virt --vm 2>/dev/null || true)
-[[ $virt =~ ^(kvm|qemu|oracle)$ ]] || {
-  echo "This helper is restricted to QEMU/KVM and VirtualBox guests." >&2
-  exit 1
-}
-
-[[ -f /etc/arch-release ]] || {
-  echo "Arch Linux was not detected." >&2
-  exit 1
-}
-
-if [[ -f /usr/share/omarchy/shell/shell.qml ]]; then
-  echo "This VM already appears to be Omarchy Quattro."
-  exit 0
-fi
-
-command -v omarchy >/dev/null 2>&1 || {
-  echo "Install Omarchy 3.8.4 before running this helper." >&2
-  exit 1
-}
-
-upgrade=$(mktemp)
-trap 'rm -f -- "$upgrade"' EXIT
-curl -fL --proto '=https' --tlsv1.2 "$url" -o "$upgrade"
-printf '%s  %s\n' "$expected_sha256" "$upgrade" | sha256sum -c -
-chmod 0700 "$upgrade"
-
-"$upgrade" --yes --dev --channel edge --user "$USER"
-
-echo
-echo "Quattro upgrade completed. Reboot, verify Quickshell, then take the"
-echo "omarchy-quattro-golden VM snapshot."
+repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+exec "$repo/tools/migrate-omarchy-3.8.4-to-quattro" "$@"
