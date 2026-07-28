@@ -17,7 +17,7 @@ usage() {
 Usage: ./setup <command> [options]
 
 Commands:
-  inspect              Inspect compatibility without changing the system
+  inspect              Inspect compatibility (may request sudo for /boot)
   install              Install Parm files beside Omarchy Quattro
   convert              Stage a complete Omarchy Quattro to Parm conversion
   update [version]     Update an existing Parm installation
@@ -51,14 +51,17 @@ fi
 
 case "$command_name" in
   inspect)
+    parm_prepare_inspection_privileges
     parm_inspect "${PARM_JSON:-0}"
     ;;
   install)
     parm_require_vm_gate
+    parm_prepare_inspection_privileges
     parm_install_stage
     ;;
   convert)
     parm_require_vm_gate
+    parm_prepare_inspection_privileges
     parm_assert_compatible
     parm_confirm_conversion
     parm_install_stage

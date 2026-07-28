@@ -20,7 +20,7 @@ parm_detect_bootloader() {
     /boot/limine.conf \
     /boot/EFI/limine/limine.conf \
     /boot/EFI/Limine/limine.conf; do
-    [[ -f $(parm_root_path "$config_path") ]] && {
+    parm_root_test -f "$config_path" && {
       printf 'limine\n'
       return
     }
@@ -33,7 +33,7 @@ parm_limine_efi_present() {
   for efi_path in \
     /boot/EFI/limine/limine_x64.efi \
     /boot/EFI/Limine/limine_x64.efi; do
-    [[ -s $(parm_root_path "$efi_path") ]] && return 0
+    parm_root_test -s "$efi_path" && return 0
   done
   return 1
 }

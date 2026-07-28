@@ -99,6 +99,31 @@ parm_run_root() {
   fi
 }
 
+parm_prepare_inspection_privileges() {
+  if parm_is_testing || ((EUID == 0)); then
+    return
+  fi
+
+  command -v sudo >/dev/null 2>&1 ||
+    parm_die "sudo is required to validate protected boot files"
+  sudo -v ||
+    parm_die "sudo authentication is required to validate protected boot files"
+}
+
+parm_root_test() {
+  local operator=$1
+  local path=$2
+  local target
+  target=$(parm_root_path "$path")
+
+  test "$operator" "$target" && return 0
+  if ! parm_is_testing && ((EUID != 0)); then
+    sudo -n test "$operator" "$target"
+  else
+    return 1
+  fi
+}
+
 parm_install_root_file() {
   local source=$1
   local destination=$2
