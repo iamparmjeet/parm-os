@@ -12,21 +12,28 @@ parm_packages_install() {
   fi
 
   local official=() aur=()
+  local pacman_args=(-S --needed)
+  local yay_args=(-S --needed)
   mapfile -t official < <(parm_read_package_manifest "$PARM_SOURCE_DIR/packages/official.txt")
   mapfile -t aur < <(parm_read_package_manifest "$PARM_SOURCE_DIR/packages/aur.txt")
+
+  if ((PARM_ASSUME_YES)); then
+    # --noconfirm answers "no" to conflict-removal questions. --ask 4 selects
+    # removal only when the caller explicitly requested unattended conversion.
+    pacman_args+=(--noconfirm --ask 4)
+    yay_args+=(--noconfirm --ask 4)
+  else
+    parm_log "Package changes are interactive; review every removal prompt"
+  fi
 
   if pacman -Q quickshell-git >/dev/null 2>&1; then
     parm_log "Replacing quickshell-git with repository quickshell in one transaction"
   fi
-  # --noconfirm answers "no" to conflict-removal questions. --ask 4 selects
-  # removal of the conflicting provider while its replacement is installed in
-  # the same transaction, so dependencies such as omarchy-dev -> quickshell
-  # remain satisfied throughout.
-  parm_run_root pacman -S --needed --noconfirm --ask 4 "${official[@]}"
+  parm_run_root pacman "${pacman_args[@]}" "${official[@]}"
   if ((${#aur[@]})); then
     command -v yay >/dev/null 2>&1 || parm_die "yay is required for AUR dependencies"
     parm_run sudo -u "$(parm_target_user)" \
-      yay -S --needed --noconfirm --ask 4 "${aur[@]}"
+      yay "${yay_args[@]}" "${aur[@]}"
   fi
 
   local retained=()

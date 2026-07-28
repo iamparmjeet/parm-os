@@ -45,15 +45,14 @@ else
   fail "safe package-backed Quattro migration contract"
 fi
 
-if rg -q \
-  'pacman -S --needed --noconfirm --ask 4' \
-  "$repo/lib/packages.sh" &&
-  rg -q \
-    'yay -S --needed --noconfirm --ask 4' \
-    "$repo/lib/packages.sh"; then
-  pass "atomic package-provider replacement contract"
+if rg -q 'ttf-jetbrains-mono-nerd-basic' "$repo/packages/official.txt" &&
+  ! rg -q '^ttf-jetbrains-mono-nerd$' "$repo/packages/official.txt" &&
+  rg -q 'if \(\(PARM_ASSUME_YES\)\)' "$repo/lib/packages.sh" &&
+  rg -q 'pacman_args\+=\(--noconfirm --ask 4\)' "$repo/lib/packages.sh" &&
+  rg -q 'Package changes are interactive' "$repo/lib/packages.sh"; then
+  pass "interactive package-conflict contract"
 else
-  fail "atomic package-provider replacement contract"
+  fail "interactive package-conflict contract"
 fi
 
 if jq empty "$repo/config/default.json" "$repo/config/config.schema.json"; then

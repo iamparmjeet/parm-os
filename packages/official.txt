@@ -74,4 +74,4 @@ docker-compose
 noto-fonts
 noto-fonts-cjk
 noto-fonts-emoji
-ttf-jetbrains-mono-nerd
+ttf-jetbrains-mono-nerd-basic
