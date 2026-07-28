@@ -59,6 +59,7 @@ case "$command_name" in
     ;;
   convert)
     parm_require_vm_gate
+    parm_assert_compatible
     parm_confirm_conversion
     parm_install_stage
     parm_log "Parm is staged. Reboot to validate the Parm session."

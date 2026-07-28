@@ -15,18 +15,42 @@ parm_detect_quattro() {
 }
 
 parm_detect_bootloader() {
-  [[ -f $(parm_root_path /boot/limine.conf) ]] && {
-    printf 'limine\n'
-    return
-  }
+  local config_path
+  for config_path in \
+    /boot/limine.conf \
+    /boot/EFI/limine/limine.conf \
+    /boot/EFI/Limine/limine.conf; do
+    [[ -f $(parm_root_path "$config_path") ]] && {
+      printf 'limine\n'
+      return
+    }
+  done
   printf 'unknown\n'
 }
 
+parm_detect_firmware() {
+  [[ -d $(parm_root_path /sys/firmware/efi) ]] && {
+    printf 'uefi\n'
+    return
+  }
+  printf 'bios\n'
+}
+
+parm_boot_mounted() {
+  if parm_is_testing; then
+    [[ -d $(parm_root_path /boot) ]]
+  else
+    findmnt -n --mountpoint /boot >/dev/null 2>&1
+  fi
+}
+
 parm_inspect_json() {
-  local virt quattro bootloader btrfs arch
+  local virt quattro bootloader firmware boot_mounted btrfs arch
   virt=$(parm_virtualization)
   parm_detect_quattro && quattro=true || quattro=false
   bootloader=$(parm_detect_bootloader)
+  firmware=$(parm_detect_firmware)
+  parm_boot_mounted && boot_mounted=true || boot_mounted=false
   [[ -f $(parm_root_path /etc/arch-release) ]] && arch=true || arch=false
   if parm_is_testing; then
     [[ -d $(parm_root_path /.snapshots) ]] && btrfs=true || btrfs=false
@@ -37,6 +61,8 @@ parm_inspect_json() {
   jq -n \
     --arg virtualization "${virt:-none}" \
     --arg bootloader "$bootloader" \
+    --arg firmware "$firmware" \
+    --argjson bootMounted "$boot_mounted" \
     --argjson arch "$arch" \
     --argjson quattro "$quattro" \
     --argjson btrfs "$btrfs" \
@@ -47,8 +73,18 @@ parm_inspect_json() {
       omarchyQuattro: $quattro,
       btrfsRoot: $btrfs,
       bootloader: $bootloader,
+      firmware: $firmware,
+      bootMounted: $bootMounted,
       virtualization: $virtualization,
-      compatible: ($arch and $quattro and ($virtualization != "none"))
+      compatible: (
+        $arch and
+        $quattro and
+        $btrfs and
+        ($bootloader == "limine") and
+        ($firmware == "uefi") and
+        $bootMounted and
+        ($virtualization != "none")
+      )
     }'
 }
 
@@ -66,6 +102,8 @@ parm_inspect() {
   printf '  Omarchy Quattro:  %s\n' "$(jq -r '.omarchyQuattro' <<<"$report")"
   printf '  Btrfs root:       %s\n' "$(jq -r '.btrfsRoot' <<<"$report")"
   printf '  Bootloader:       %s\n' "$(jq -r '.bootloader' <<<"$report")"
+  printf '  Firmware:         %s\n' "$(jq -r '.firmware' <<<"$report")"
+  printf '  /boot mounted:    %s\n' "$(jq -r '.bootMounted' <<<"$report")"
   printf '  Virtualization:   %s\n' "$(jq -r '.virtualization' <<<"$report")"
   printf '  Compatible:       %s\n' "$(jq -r '.compatible' <<<"$report")"
 }
@@ -77,6 +115,12 @@ parm_assert_compatible() {
     parm_die "Parm requires Arch Linux"
   [[ $(jq -r '.omarchyQuattro' <<<"$report") == true ]] ||
     parm_die "Parm requires Omarchy Quattro; legacy Omarchy is not supported"
+  [[ $(jq -r '.firmware' <<<"$report") == uefi ]] ||
+    parm_die "Parm requires UEFI firmware; this VM booted in legacy BIOS mode"
+  [[ $(jq -r '.bootMounted' <<<"$report") == true ]] ||
+    parm_die "Parm requires the EFI system partition to be mounted at /boot"
+  [[ $(jq -r '.btrfsRoot' <<<"$report") == true ]] ||
+    parm_die "Parm requires a Btrfs root filesystem"
   [[ $(jq -r '.bootloader' <<<"$report") == limine ]] ||
-    parm_die "Parm pre-release requires Limine"
+    parm_die "Parm requires a Limine configuration on the mounted EFI system partition"
 }

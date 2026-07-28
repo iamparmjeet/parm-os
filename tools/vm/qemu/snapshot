@@ -4,6 +4,7 @@ set -euo pipefail
 
 name=${1:-parm-qemu}
 snapshot=${2:-}
+connection=${PARM_LIBVIRT_URI:-qemu:///session}
 [[ -n $snapshot ]] || {
   echo "Usage: $0 <vm-name> <snapshot-name>" >&2
   exit 2
@@ -13,6 +14,6 @@ snapshot=${2:-}
   exit 1
 }
 
-virsh dominfo "$name" >/dev/null
-virsh snapshot-create-as "$name" "$snapshot" \
+virsh --connect "$connection" dominfo "$name" >/dev/null
+virsh --connect "$connection" snapshot-create-as "$name" "$snapshot" \
   "Parm validation snapshot $snapshot" --atomic

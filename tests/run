@@ -89,6 +89,7 @@ mkdir -p \
   "$fixture/etc" \
   "$fixture/boot" \
   "$fixture/.snapshots" \
+  "$fixture/sys/firmware/efi" \
   "$fixture/usr/share/omarchy/shell" \
   "$fixture/home/tester"
 touch \
@@ -102,11 +103,43 @@ report=$(
   PARM_TARGET_USER=tester \
   "$repo/setup" inspect --json
 )
-if jq -e '.compatible and .omarchyQuattro and .virtualization == "test-fixture"' <<<"$report" >/dev/null; then
+if jq -e '
+  .compatible and
+  .omarchyQuattro and
+  .bootMounted and
+  .firmware == "uefi" and
+  .virtualization == "test-fixture"
+' <<<"$report" >/dev/null; then
   pass "Quattro fixture inspection"
 else
   fail "Quattro fixture inspection"
 fi
+
+rmdir "$fixture/sys/firmware/efi"
+bios_report=$(
+  PARM_TESTING=1 \
+  PARM_TEST_ROOT="$fixture" \
+  PARM_TARGET_USER=tester \
+  "$repo/setup" inspect --json
+)
+if jq -e '.firmware == "bios" and (.compatible | not)' <<<"$bios_report" >/dev/null; then
+  pass "legacy BIOS fixture rejection"
+else
+  fail "legacy BIOS fixture rejection"
+fi
+if bios_error=$(
+  PARM_TESTING=1 \
+  PARM_TEST_ROOT="$fixture" \
+  PARM_TARGET_USER=tester \
+  "$repo/setup" convert --yes 2>&1
+); then
+  fail "legacy BIOS conversion refusal"
+elif rg -q 'requires UEFI firmware' <<<"$bios_error"; then
+  pass "legacy BIOS conversion refusal"
+else
+  fail "legacy BIOS conversion error message"
+fi
+mkdir -p "$fixture/sys/firmware/efi"
 
 if PARM_TESTING=1 \
   PARM_TEST_ROOT="$fixture" \
