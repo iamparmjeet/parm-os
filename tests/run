@@ -1,284 +1,131 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -euo pipefail
 
-repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-failures=0
+TEST_ROOT=$(mktemp -d)
+TEST_HOME="$TEST_ROOT/home"
+TEST_STATE="$TEST_ROOT/state"
+mkdir -p -- "$TEST_HOME" "$TEST_STATE"
 
-pass() {
-  printf 'PASS  %s\n' "$1"
+cleanup() {
+  rm -rf -- "$TEST_ROOT"
+}
+trap cleanup EXIT
+
+REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+
+run_setup() {
+  PARM_CONFIG_HOME="$TEST_HOME" \
+    PARM_CONFIG_STATE_HOME="$TEST_STATE" \
+    PARM_CONFIG_SKIP_OMARCHY_CHECK=1 \
+    PARM_CONFIG_SKIP_PROFILE_CHECK=1 \
+    "$REPO_ROOT/setup" "$@"
 }
 
-fail() {
-  printf 'FAIL  %s\n' "$1" >&2
-  failures=$((failures + 1))
+assert_file_equals() {
+  local expected=$1 actual=$2
+  cmp -s -- "$expected" "$actual" || {
+    printf 'Mismatch: %s != %s\n' "$expected" "$actual" >&2
+    exit 1
+  }
 }
 
-for script in \
-  "$repo/setup" \
-  "$repo/bin/parmctl" \
-  "$repo"/lib/*.sh \
-  "$repo/themes/apply" \
-  "$repo/migrations/omarchy-quattro/import" \
-  "$repo/system/health-check" \
-  "$repo/system/finalize" \
-  "$repo/tools/verify-host-untouched" \
-  "$repo/tools/migrate-omarchy-3.8.4-to-quattro" \
-  "$repo/tools/vm/prepare-quattro" \
-  "$repo"/tools/vm/qemu/{create,snapshot} \
-  "$repo"/tools/vm/virtualbox/{create,snapshot}; do
-  if bash -n "$script"; then
-    pass "bash syntax: ${script#"$repo/"}"
-  else
-    fail "bash syntax: ${script#"$repo/"}"
-  fi
-done
+# Empty-home status is valid JSON and reports missing files.
+run_setup status --json |
+  jq -e 'length > 0 and all(.[]; .state == "missing")' >/dev/null
 
-migration_script="$repo/tools/migrate-omarchy-3.8.4-to-quattro"
-migration_args=$(sed -n '/^upgrade_args=(/,/^)/p' "$migration_script")
-if rg -q -- 'UPGRADER_COMMIT=9b693cca63d111fc3faba16aea149d226881b427' \
-  "$migration_script" &&
-  rg -q -- '^[[:space:]]+--channel edge$' <<<"$migration_args" &&
-  ! rg -q -- '--dev' <<<"$migration_args"; then
-  pass "safe package-backed Quattro migration contract"
-else
-  fail "safe package-backed Quattro migration contract"
-fi
+# Dry-run must not write.
+run_setup install --dry-run >/dev/null
+[[ ! -e $TEST_HOME/.zshrc ]]
 
-if rg -q 'ttf-jetbrains-mono-nerd-basic' "$repo/packages/official.txt" &&
-  ! rg -q '^ttf-jetbrains-mono-nerd$' "$repo/packages/official.txt" &&
-  rg -q 'if \(\(PARM_ASSUME_YES\)\)' "$repo/lib/packages.sh" &&
-  rg -q 'pacman_args\+=\(--noconfirm --ask 4\)' "$repo/lib/packages.sh" &&
-  rg -q 'Package changes are interactive' "$repo/lib/packages.sh"; then
-  pass "interactive package-conflict contract"
-else
-  fail "interactive package-conflict contract"
-fi
+# Clean install produces an exact managed tree.
+run_setup install >/dev/null
+run_setup status --json |
+  jq -e 'all(.[]; .state == "matching")' >/dev/null
+assert_file_equals "$REPO_ROOT/home/.zshrc" "$TEST_HOME/.zshrc"
 
-if jq empty "$repo/config/default.json" "$repo/config/config.schema.json"; then
-  pass "JSON syntax"
-else
-  fail "JSON syntax"
-fi
-
-if jq -e '
-  .schemaVersion == 1 and
-  (.appearance.mode | IN("auto", "light", "dark")) and
-  (.webapps | type == "array") and
-  (.keybindings | type == "array")
-' "$repo/config/default.json" >/dev/null; then
-  pass "default configuration contract"
-else
-  fail "default configuration contract"
-fi
-
-for lua in "$repo"/config/hypr/*.lua; do
-  if luac -p "$lua"; then
-    pass "Lua syntax: ${lua#"$repo/"}"
-  else
-    fail "Lua syntax: ${lua#"$repo/"}"
-  fi
-done
-
-vm_xml=$(mktemp)
-sed \
-  -e 's|@NAME@|parm-test|g' \
-  -e 's|@DISK@|/tmp/parm-test.qcow2|g' \
-  -e 's|@ISO@|/tmp/omarchy-test.iso|g' \
-  "$repo/tools/vm/qemu/domain.xml.in" >"$vm_xml"
-if xmllint --noout "$vm_xml" &&
-  virt-xml-validate "$vm_xml" >/dev/null &&
-  rg -q '<interface type="user">' "$vm_xml" &&
-  ! rg -q 'blob="on"' "$vm_xml"; then
-  pass "QEMU XML template"
-else
-  fail "QEMU XML template"
-fi
-
-fixture=$(mktemp -d)
-trap 'rm -rf -- "$fixture"' EXIT
-mkdir -p \
-  "$fixture/etc" \
-  "$fixture/etc/default" \
-  "$fixture/boot" \
-  "$fixture/boot/EFI/limine" \
-  "$fixture/.snapshots" \
-  "$fixture/sys/firmware/efi" \
-  "$fixture/usr/share/omarchy/shell" \
-  "$fixture/home/tester/.config/uwsm"
-touch \
-  "$fixture/etc/arch-release" \
-  "$fixture/boot/limine.conf" \
-  "$fixture/usr/share/omarchy/shell/shell.qml"
-printf 'MZ' >"$fixture/boot/EFI/limine/limine_x64.efi"
-printf '%s\n' \
-  'export OMARCHY_PATH=$HOME/.local/share/omarchy' \
-  'omarchy-cmd-present mise && eval "$(mise activate bash --shims)"' \
-  >"$fixture/home/tester/.config/uwsm/env"
-printf 'export BROWSER=omarchy-launch-browser\n' \
-  >"$fixture/home/tester/.config/uwsm/default"
-printf '%s\n' \
-  'TARGET_OS_NAME="Omarchy"' \
-  'CUSTOM_UKI_NAME="omarchy"' \
-  'ENABLE_UKI=yes' \
-  'KERNEL_CMDLINE[default]+=" cryptdevice=PARTUUID=test:root root=/dev/mapper/root"' \
-  >"$fixture/etc/default/limine"
-
-report=$(
-  PARM_TESTING=1 \
-  PARM_TEST_ROOT="$fixture" \
-  PARM_TARGET_USER=tester \
-  "$repo/setup" inspect --json
-)
-if jq -e '
-  .compatible and
-  .omarchyQuattro and
-  .bootMounted and
-  .limineEfi and
-  .firmware == "uefi" and
-  .virtualization == "test-fixture"
-' <<<"$report" >/dev/null; then
-  pass "Quattro fixture inspection"
-else
-  fail "Quattro fixture inspection"
-fi
-
-rmdir "$fixture/sys/firmware/efi"
-bios_report=$(
-  PARM_TESTING=1 \
-  PARM_TEST_ROOT="$fixture" \
-  PARM_TARGET_USER=tester \
-  "$repo/setup" inspect --json
-)
-if jq -e '.firmware == "bios" and (.compatible | not)' <<<"$bios_report" >/dev/null; then
-  pass "legacy BIOS fixture rejection"
-else
-  fail "legacy BIOS fixture rejection"
-fi
-if bios_error=$(
-  PARM_TESTING=1 \
-  PARM_TEST_ROOT="$fixture" \
-  PARM_TARGET_USER=tester \
-  "$repo/setup" convert --yes 2>&1
-); then
-  fail "legacy BIOS conversion refusal"
-elif rg -q 'requires UEFI firmware' <<<"$bios_error"; then
-  pass "legacy BIOS conversion refusal"
-else
-  fail "legacy BIOS conversion error message"
-fi
-mkdir -p "$fixture/sys/firmware/efi"
-
-dry_run_output=$(
-  PARM_TESTING=1 \
-  PARM_TEST_ROOT="$fixture" \
-  PARM_TARGET_USER=tester \
-  "$repo/setup" convert --dry-run --yes
-)
-if rg -q 'Backup planned:' <<<"$dry_run_output" &&
-  rg -q 'DRY-RUN:' <<<"$dry_run_output" &&
-  rg -q 'No changes were made; do not reboot' <<<"$dry_run_output" &&
-  ! rg -q 'Parm is staged' <<<"$dry_run_output" &&
-  [[ ! -e $fixture/var/lib/parm ]]; then
-  pass "non-writing conversion dry-run"
-else
-  fail "non-writing conversion dry-run"
-fi
-
-if PARM_TESTING=1 \
-  PARM_TEST_ROOT="$fixture" \
-  PARM_TARGET_USER=tester \
-  "$repo/setup" convert --yes >/dev/null; then
-  pass "isolated fixture conversion"
-else
-  fail "isolated fixture conversion"
-fi
-
-if [[ -f $fixture/var/lib/parm/conversion-phase ]] &&
-  [[ $(<"$fixture/var/lib/parm/conversion-phase") == staged ]] &&
-  [[ -f $fixture/usr/share/parm/config/default.json ]] &&
-  [[ -f $fixture/etc/default/limine.parm-preconversion ]] &&
-  rg -q '^TARGET_OS_NAME="Parm"$' "$fixture/etc/default/limine" &&
-  rg -q '^CUSTOM_UKI_NAME="parm"$' "$fixture/etc/default/limine" &&
-  rg -q 'cryptdevice=PARTUUID=test:root' "$fixture/etc/default/limine" &&
-  rg -q '/dev/tty1' "$fixture/home/tester/.zprofile" &&
-  rg -q '# BEGIN PARM UWSM ENV' "$fixture/home/tester/.config/uwsm/env" &&
-  rg -q 'OMARCHY_PATH' \
-    "$fixture/home/tester/.config/parm/imported/uwsm-env.before-parm" &&
-  ! rg -q 'OMARCHY_PATH|omarchy-' "$fixture/home/tester/.config/uwsm/env"; then
-  pass "fixture installation outputs"
-else
-  fail "fixture installation outputs"
-fi
-
-printf 'broken\n' >"$fixture/usr/share/parm/shell/shell.qml"
-if PARM_TESTING=1 \
-  PARM_TEST_ROOT="$fixture" \
-  PARM_TARGET_USER=tester \
-  "$repo/setup" repair --vm-test >/dev/null &&
-  cmp -s "$repo/shell/shell.qml" "$fixture/usr/share/parm/shell/shell.qml"; then
-  pass "repair restores product-owned files without reconversion"
-else
-  fail "repair restores product-owned files without reconversion"
-fi
-
-if rg -q 'DesktopEntries.applications' "$repo/shell/shell.qml" &&
-  rg -q 'entry\.execute\(\)' "$repo/shell/shell.qml" &&
-  ! rg -q 'application search arrives' "$repo/shell/shell.qml"; then
-  pass "native application launcher contract"
-else
-  fail "native application launcher contract"
-fi
-
-webhome="$fixture/webhome"
-mkdir -p "$webhome/.config/parm"
-install -m 0644 "$repo/config/default.json" "$webhome/.config/parm/config.json"
-if HOME="$webhome" \
-  PARM_SHARE="$repo" \
-  PARM_CONFIG="$webhome/.config/parm/config.json" \
-  "$repo/bin/parmctl" webapp add test-app "Test App" https://example.com &&
-  jq -e '.webapps[] | select(.id == "test-app")' "$webhome/.config/parm/config.json" >/dev/null &&
-  [[ -f $webhome/.local/share/applications/parm-webapp-test-app.desktop ]]; then
-  pass "webapp add and desktop entry"
-else
-  fail "webapp add and desktop entry"
-fi
-
-if HOME="$webhome" \
-  PARM_SHARE="$repo" \
-  PARM_CONFIG="$webhome/.config/parm/config.json" \
-  "$repo/bin/parmctl" webapp edit test-app enabled false &&
-  [[ ! -f $webhome/.local/share/applications/parm-webapp-test-app.desktop ]]; then
-  pass "webapp edit and desktop removal"
-else
-  fail "webapp edit and desktop removal"
-fi
-
-HOME="$webhome" \
-  PARM_SHARE="$repo" \
-  PARM_CONFIG="$webhome/.config/parm/config.json" \
-  "$repo/bin/parmctl" webapp remove test-app
-if ! jq -e '.webapps[] | select(.id == "test-app")' "$webhome/.config/parm/config.json" >/dev/null; then
-  pass "webapp removal"
-else
-  fail "webapp removal"
-fi
-
-if PARM_TESTING=1 PARM_TEST_ROOT=/ "$repo/setup" inspect >/dev/null 2>&1; then
-  fail "unsafe test root rejection"
-else
-  pass "unsafe test root rejection"
-fi
-
-if rg -n -i 'ai.sidebar|model-usage|openai|anthropic' "$repo/shell" "$repo/settings" >/dev/null; then
-  fail "AI surface exclusion"
-else
-  pass "AI surface exclusion"
-fi
-
-if ((failures)); then
-  printf '\n%d test(s) failed.\n' "$failures" >&2
+# Conflicts refuse atomically.
+printf 'local conflict\n' >"$TEST_HOME/.zshrc"
+if run_setup install >/dev/null 2>&1; then
+  echo "Expected conflict refusal" >&2
   exit 1
 fi
+[[ $(<"$TEST_HOME/.zshrc") == "local conflict" ]]
 
-printf '\nAll Parm tests passed.\n'
+# Force creates a backup and replaces the conflict.
+run_setup install --force >/dev/null
+assert_file_equals "$REPO_ROOT/home/.zshrc" "$TEST_HOME/.zshrc"
+BACKUP_ID=$(run_setup backups | head -n1)
+[[ -n $BACKUP_ID ]]
+
+# Restore returns the pre-force content.
+run_setup restore "$BACKUP_ID" --yes >/dev/null
+[[ $(<"$TEST_HOME/.zshrc") == "local conflict" ]]
+
+# Profile installation adds the host-specific files.
+run_setup install --force --profile parm-laptop >/dev/null
+assert_file_equals \
+  "$REPO_ROOT/profiles/parm-laptop/home/.config/hypr/monitors.lua" \
+  "$TEST_HOME/.config/hypr/monitors.lua"
+assert_file_equals \
+  "$REPO_ROOT/profiles/parm-laptop/home/.config/hypr/profile.lua" \
+  "$TEST_HOME/.config/hypr/profile.lua"
+
+# Capture previews drift without writing to the repository.
+printf '\n# live-only test\n' >>"$TEST_HOME/.config/hypr/input.lua"
+before=$(sha256sum "$REPO_ROOT/home/.config/hypr/input.lua")
+run_setup capture --profile parm-laptop >/dev/null
+after=$(sha256sum "$REPO_ROOT/home/.config/hypr/input.lua")
+[[ $before == "$after" ]]
+
+# Force/restore preserves an existing symlink as a symlink.
+printf 'linked zsh\n' >"$TEST_ROOT/linked-zshrc"
+ln -sfn -- "$TEST_ROOT/linked-zshrc" "$TEST_HOME/.zshrc"
+run_setup install --force >/dev/null
+SYMLINK_BACKUP=$(run_setup backups | head -n1)
+run_setup restore "$SYMLINK_BACKUP" --yes >/dev/null
+[[ -L $TEST_HOME/.zshrc ]]
+[[ $(readlink -- "$TEST_HOME/.zshrc") == "$TEST_ROOT/linked-zshrc" ]]
+
+# A known legacy checksum is retired only under --force.
+mkdir -p -- "$TEST_HOME/.config/omarchy"
+printf '{}\n' >"$TEST_HOME/.config/omarchy/bar.json"
+run_setup install --force >/dev/null
+[[ ! -e $TEST_HOME/.config/omarchy/bar.json ]]
+
+# Capture-write is tested in an isolated repository copy.
+CAPTURE_REPO="$TEST_ROOT/repository-copy"
+mkdir -p -- "$CAPTURE_REPO"
+tar --exclude=.git -C "$REPO_ROOT" -cf - . |
+  tar -C "$CAPTURE_REPO" -xf -
+git -C "$CAPTURE_REPO" init -q
+git -C "$CAPTURE_REPO" config user.name Test
+git -C "$CAPTURE_REPO" config user.email test@example.invalid
+git -C "$CAPTURE_REPO" add .
+git -C "$CAPTURE_REPO" commit -qm baseline
+
+capture_setup() {
+  PARM_CONFIG_HOME="$TEST_HOME" \
+    PARM_CONFIG_STATE_HOME="$TEST_STATE" \
+    PARM_CONFIG_SKIP_OMARCHY_CHECK=1 \
+    PARM_CONFIG_SKIP_PROFILE_CHECK=1 \
+    "$CAPTURE_REPO/setup" "$@"
+}
+
+printf '\n# captured change\n' >>"$TEST_HOME/.config/hypr/looknfeel.lua"
+capture_setup capture --write --profile parm-laptop >/dev/null
+assert_file_equals \
+  "$CAPTURE_REPO/home/.config/hypr/looknfeel.lua" \
+  "$TEST_HOME/.config/hypr/looknfeel.lua"
+
+# Absolute home paths are rejected and do not overwrite the repository copy.
+printf '\n# /home/not-portable/private\n' >>"$TEST_HOME/.config/hypr/input.lua"
+portable_before=$(sha256sum "$CAPTURE_REPO/home/.config/hypr/input.lua")
+if capture_setup capture --write --force --profile parm-laptop >/dev/null 2>&1; then
+  echo "Expected non-portable capture rejection" >&2
+  exit 1
+fi
+portable_after=$(sha256sum "$CAPTURE_REPO/home/.config/hypr/input.lua")
+[[ $portable_before == "$portable_after" ]]
+
+echo "All tests passed"

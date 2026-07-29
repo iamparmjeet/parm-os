@@ -1,3 +1,0 @@
-zen-browser-bin
-limine-mkinitcpio-hook
-limine-snapper-sync

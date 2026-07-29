@@ -1,47 +1,40 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-parm_read_package_manifest() {
-  local manifest=$1
-  sed -E '/^[[:space:]]*(#|$)/d' "$manifest"
+parm_read_packages() {
+  local file=$1
+  [[ -f $file ]] || return 0
+  sed -E '/^[[:space:]]*(#|$)/d' "$file"
 }
 
-parm_packages_install() {
-  if parm_is_testing || (( PARM_DRY_RUN )); then
-    parm_log "Package installation skipped in fixture/dry-run mode"
+parm_install_packages() {
+  ((PARM_PACKAGES)) || return 0
+  parm_require_omarchy_4
+
+  local official=() aur=()
+  mapfile -t official < <(parm_read_packages "$PARM_CONFIG_ROOT/packages/core-official.txt")
+  mapfile -t aur < <(parm_read_packages "$PARM_CONFIG_ROOT/packages/core-aur.txt")
+
+  if [[ ${PARM_PROFILE:-} == parm-laptop ]]; then
+    mapfile -t -O "${#official[@]}" official \
+      < <(parm_read_packages "$PARM_CONFIG_ROOT/packages/parm-laptop-official.txt")
+    mapfile -t -O "${#aur[@]}" aur \
+      < <(parm_read_packages "$PARM_CONFIG_ROOT/packages/parm-laptop-aur.txt")
+  fi
+
+  if ((PARM_DRY_RUN)); then
+    if ((${#official[@]})); then
+      parm_log "would install official packages: ${official[*]}"
+    fi
+    if ((${#aur[@]})); then
+      parm_log "would install AUR packages: ${aur[*]}"
+    fi
     return
   fi
 
-  local official=() aur=()
-  local pacman_args=(-S --needed)
-  local yay_args=(-S --needed)
-  mapfile -t official < <(parm_read_package_manifest "$PARM_SOURCE_DIR/packages/official.txt")
-  mapfile -t aur < <(parm_read_package_manifest "$PARM_SOURCE_DIR/packages/aur.txt")
-
-  if ((PARM_ASSUME_YES)); then
-    # --noconfirm answers "no" to conflict-removal questions. --ask 4 selects
-    # removal only when the caller explicitly requested unattended conversion.
-    pacman_args+=(--noconfirm --ask 4)
-    yay_args+=(--noconfirm --ask 4)
-  else
-    parm_log "Package changes are interactive; review every removal prompt"
+  if ((${#official[@]})); then
+    omarchy pkg add "${official[@]}"
   fi
-
-  if pacman -Q quickshell-git >/dev/null 2>&1; then
-    parm_log "Replacing quickshell-git with repository quickshell in one transaction"
-  fi
-  parm_run_root pacman "${pacman_args[@]}" "${official[@]}"
   if ((${#aur[@]})); then
-    command -v yay >/dev/null 2>&1 || parm_die "yay is required for AUR dependencies"
-    parm_run sudo -u "$(parm_target_user)" \
-      yay "${yay_args[@]}" "${aur[@]}"
+    omarchy pkg aur add "${aur[@]}"
   fi
-
-  local retained=()
-  mapfile -t retained < <(parm_read_package_manifest "$PARM_SOURCE_DIR/packages/retain.txt")
-  local installed=() package_name
-  for package_name in "${retained[@]}"; do
-    pacman -Q "$package_name" >/dev/null 2>&1 && installed+=("$package_name")
-  done
-  ((${#installed[@]})) &&
-    parm_run_root pacman -D --asexplicit "${installed[@]}"
 }

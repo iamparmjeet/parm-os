@@ -1,0 +1,8 @@
+# sha256	destination
+ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356	.config/omarchy/bar.json
+8134168e08ad12fe9e9b1d09c43cb47adf0bcc5c50e10113aab47110ff4a3691	.config/omarchy/bar/modules/cpu-ram.qml
+70c26af41f137c3a443235ff586ec5dcbb5824a3482e76c9e7577ac9b63692fa	.config/omarchy/bar/scripts/cpu-ram-stats
+07dc8124103a3b27783d0a2defde2a59f182443a46cd2e404bd85a3116187805	.config/omarchy/hooks/post-boot.d/quickshell-desktop
+1d71095f03b2fcfc98078eaf428b688afb05bd1f747b26840dc5451a4a0c8d7a	.config/omarchy/hooks/theme-set
+1a2d1458229f8a5fac7444dad26898cb9bfede9a277bfcd165807ca78dbbf327	.config/omarchy/scripts/gen-qt-theme.sh
+147702e0bde5c427008a6e48b8f77f7880a8e61f40e976b2b9204a988561e9be	.config/omarchy/scripts/suspend-locked

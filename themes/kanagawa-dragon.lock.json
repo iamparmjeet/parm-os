@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "name": "kanagawa-dragon",
+  "repository": "https://github.com/bjarneo/omarchy-kanagawa-dragon-theme",
+  "commit": "05f7658efb113e86f97d7800d5ac05f0bb104c45",
+  "activeByDefault": false,
+  "note": "Fetch only on explicit request. Do not deploy the upstream quickshell directory."
+}

@@ -1,0 +1,2 @@
+helium-browser-bin
+zen-browser-bin

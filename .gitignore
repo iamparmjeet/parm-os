@@ -1,3 +1,6 @@
-.build/
 .test-results/
+.tmp/
 .host-baseline.sha256
+*.log
+*.bak
+*.bak.*

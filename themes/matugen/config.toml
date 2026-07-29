@@ -1,9 +1,0 @@
-# Parm uses `matugen ... --json hex` and renders its outputs atomically in
-# themes/apply. This file records the generation defaults and is reserved for
-# future user templates.
-
-[config]
-reload_apps = false
-set_wallpaper = false
-
-[config.custom_colors]

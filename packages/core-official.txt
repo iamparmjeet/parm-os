@@ -1,0 +1,12 @@
+alacritty
+atuin
+btop
+eza
+fastfetch
+fzf
+jq
+mpv
+oh-my-posh
+tmux
+zoxide
+zsh

@@ -1,6 +1,0 @@
-#!/bin/bash
-
-set -euo pipefail
-
-repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-exec "$repo/tools/migrate-omarchy-3.8.4-to-quattro" "$@"

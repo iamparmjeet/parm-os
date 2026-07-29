@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PARM_CONFIG_ROOT=${PARM_CONFIG_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}
+export PARM_CONFIG_ROOT
+
+# shellcheck source=lib/common.sh
+source "$PARM_CONFIG_ROOT/lib/common.sh"
+# shellcheck source=lib/backup.sh
+source "$PARM_CONFIG_ROOT/lib/backup.sh"
+# shellcheck source=lib/packages.sh
+source "$PARM_CONFIG_ROOT/lib/packages.sh"
+# shellcheck source=lib/install.sh
+source "$PARM_CONFIG_ROOT/lib/install.sh"
+# shellcheck source=lib/capture.sh
+source "$PARM_CONFIG_ROOT/lib/capture.sh"
+
+usage() {
+  cat <<'EOF'
+Usage: ./setup <command> [options]
+
+Commands:
+  status    Show drift between the repository and the target home
+  install   Install managed configuration
+  capture   Preview or save managed live files back into the repository
+  backups   List installation backups
+  restore   Restore a backup by ID
+
+Common options:
+  --profile parm-laptop  Include the laptop/external-monitor profile
+  --json                 Emit JSON from status
+  --dry-run              Print intended mutations without applying them
+  --force                Back up and override conflicts
+  --packages             Install curated packages before configuration
+  --write                Write live files during capture
+  --yes                  Skip restore confirmation
+EOF
+}
+
+command_name=${1:-}
+[[ -n $command_name ]] || {
+  usage
+  exit 2
+}
+shift
+
+PARM_PROFILE=""
+PARM_JSON=0
+PARM_DRY_RUN=0
+PARM_FORCE=0
+PARM_PACKAGES=0
+PARM_WRITE=0
+PARM_YES=0
+PARM_BACKUP_ID=""
+
+while (($#)); do
+  case "$1" in
+    --profile)
+      [[ $# -ge 2 ]] || parm_die "--profile requires a value"
+      PARM_PROFILE=$2
+      shift 2
+      ;;
+    --json) PARM_JSON=1; shift ;;
+    --dry-run) PARM_DRY_RUN=1; shift ;;
+    --force) PARM_FORCE=1; shift ;;
+    --packages) PARM_PACKAGES=1; shift ;;
+    --write) PARM_WRITE=1; shift ;;
+    --yes) PARM_YES=1; shift ;;
+    -h|--help|help)
+      usage
+      exit 0
+      ;;
+    -*)
+      parm_die "Unknown option: $1"
+      ;;
+    *)
+      if [[ $command_name == restore && -z $PARM_BACKUP_ID ]]; then
+        PARM_BACKUP_ID=$1
+        shift
+      else
+        parm_die "Unexpected argument: $1"
+      fi
+      ;;
+  esac
+done
+
+parm_validate_profile
+
+case "$command_name" in
+  status) parm_status ;;
+  install) parm_install ;;
+  capture) parm_capture ;;
+  backups) parm_backups ;;
+  restore)
+    [[ -n $PARM_BACKUP_ID ]] || parm_die "restore requires a backup ID"
+    parm_restore "$PARM_BACKUP_ID"
+    ;;
+  *)
+    usage >&2
+    parm_die "Unknown command: $command_name"
+    ;;
+esac

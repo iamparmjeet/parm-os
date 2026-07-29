@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Adjust the focused display. DDC/CI is enabled only by the parm-laptop profile.
+
+set -u
+
+stock_brightness=$(command -v omarchy-brightness-display 2>/dev/null || true)
+[[ -n $stock_brightness ]] || {
+  echo "brightness-focused-display: omarchy-brightness-display is unavailable" >&2
+  exit 1
+}
+
+profile_marker="${XDG_CONFIG_HOME:-$HOME/.config}/parm/profiles/parm-laptop"
+no_osd=0
+if [[ ${1:-} == "--no-osd" ]]; then
+  no_osd=1
+  shift
+fi
+
+stock_args=()
+(( no_osd )) && stock_args+=(--no-osd)
+
+step=${1:-}
+if [[ ! -f $profile_marker ]]; then
+  exec "$stock_brightness" "${stock_args[@]}" "$@"
+fi
+
+focused=$(hyprctl monitors -j 2>/dev/null |
+  jq -r '.[] | select(.focused == true) | .name' |
+  head -n1)
+
+bus=""
+if [[ -n $focused ]] && command -v ddcutil >/dev/null; then
+  bus=$(ddcutil detect --brief 2>/dev/null | awk -v connector="card[0-9]+-""$focused" '
+    $1 == "I2C" && $2 == "bus:" { candidate=$3; sub("/dev/i2c-", "", candidate) }
+    $1 == "DRM" && $2 == "connector:" && $3 ~ ("^" connector "$") { print candidate; exit }
+  ')
+fi
+
+# The laptop backlight and DPMS continue through Omarchy's stock implementation.
+if [[ $step == "off" || $step == "on" || -z $bus ]]; then
+  exec "$stock_brightness" "${stock_args[@]}" "$@"
+fi
+
+read_brightness() {
+  ddcutil getvcp 10 --bus "$bus" 2>/dev/null |
+    sed -n 's/.*current value = *\([0-9][0-9]*\), max value = *\([0-9][0-9]*\).*/\1 \2/p'
+}
+
+read -r current maximum < <(read_brightness)
+if [[ -z ${current:-} || -z ${maximum:-} || $maximum -le 0 ]]; then
+  exec "$stock_brightness" "${stock_args[@]}" "$@"
+fi
+
+if [[ -z $step ]]; then
+  printf '%s\n' $((current * 100 / maximum))
+  exit 0
+fi
+
+case $step in
+  +[0-9]*%) target=$((current + ${step#+} * maximum / 100)) ;;
+  [0-9]*%-) target=$((current - ${step%%%} * maximum / 100)) ;;
+  [0-9]*%) target=$((${step%%%} * maximum / 100)) ;;
+  *) exec "$stock_brightness" "${stock_args[@]}" "$@" ;;
+esac
+
+((target < 0)) && target=0
+((target > maximum)) && target=$maximum
+
+ddcutil setvcp 10 "$target" --bus "$bus" >/dev/null 2>&1 || exit 1
+percent=$((target * 100 / maximum))
+((no_osd)) || omarchy-osd -i brightness -p "$percent"

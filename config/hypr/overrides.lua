@@ -1,2 +1,0 @@
--- Personal Hyprland overrides belong here.
--- Parm never overwrites this file.

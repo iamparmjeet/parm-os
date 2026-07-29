@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "local.focused-monitor",
+  "name": "Display",
+  "version": "1.0.0",
+  "author": "Local",
+  "description": "Cloned from omarchy.monitor",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Display",
+    "description": "Cloned from omarchy.monitor",
+    "category": "System",
+    "allowMultiple": false
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.monitor"
+  }
+}

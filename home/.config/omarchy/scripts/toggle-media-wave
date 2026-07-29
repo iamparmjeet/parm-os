@@ -1,0 +1,44 @@
+#!/bin/bash
+
+set -euo pipefail
+
+config_file="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/shell.json"
+
+is_visible() {
+  jq -e 'any(.bar.layout[]?[]?; .id == "local.media-wave")' "$config_file" >/dev/null
+}
+
+show_widget() {
+  if ! is_visible; then
+    omarchy bar plugin add local.media-wave --section left --after omarchy.workspaces
+  fi
+}
+
+hide_widget() {
+  if is_visible; then
+    omarchy bar plugin remove local.media-wave
+  fi
+}
+
+case "${1:---toggle}" in
+  --is-visible)
+    is_visible
+    ;;
+  --show)
+    show_widget
+    ;;
+  --hide)
+    hide_widget
+    ;;
+  --toggle)
+    if is_visible; then
+      hide_widget
+    else
+      show_widget
+    fi
+    ;;
+  *)
+    echo "Usage: toggle-media-wave [--toggle|--show|--hide|--is-visible]" >&2
+    exit 2
+    ;;
+esac

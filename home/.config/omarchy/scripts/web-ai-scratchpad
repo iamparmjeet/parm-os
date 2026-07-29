@@ -1,0 +1,743 @@
+#!/usr/bin/env bash
+
+set -u
+set -o pipefail
+umask 077
+
+readonly CONFIG_FILE="${HOME}/.config/omarchy/web-ai.json"
+readonly STATE_DIR="${HOME}/.local/state/omarchy/web-ai"
+readonly STATE_FILE="${STATE_DIR}/state.json"
+readonly LOCK_FILE="${STATE_DIR}/controller.lock"
+readonly DISCOVERY_ATTEMPTS=80
+readonly DISCOVERY_DELAY=0.1
+
+config_json=""
+state_json=""
+browser_command=""
+browser_executable=""
+browser_profile=""
+clients_json="[]"
+monitors_json="[]"
+discovered_address=""
+discovered_pid=0
+
+error() {
+  printf 'web-ai-scratchpad: %s\n' "$*" >&2
+}
+
+die() {
+  local code=$1
+  shift
+  error "$*"
+  exit "$code"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage:
+  web-ai-scratchpad toggle <chatgpt|claude>
+  web-ai-scratchpad show <chatgpt|claude>
+  web-ai-scratchpad hide <chatgpt|claude|all>
+  web-ai-scratchpad status [chatgpt|claude|all] [--json]
+  web-ai-scratchpad open-history <chatgpt|claude>
+USAGE
+}
+
+require_executable() {
+  local executable=$1
+  command -v -- "$executable" >/dev/null 2>&1 ||
+    die 3 "Required executable '${executable}' is unavailable; install it and try again."
+}
+
+resolve_executable() {
+  local command_name=$1
+  if [[ "$command_name" == */* ]]; then
+    [[ -x "$command_name" ]] || return 1
+    readlink -f -- "$command_name"
+  else
+    command -v -- "$command_name"
+  fi
+}
+
+config_field_valid() {
+  local expression=$1
+  jq -e "$expression" >/dev/null 2>&1 <<<"$config_json"
+}
+
+load_and_validate_config() {
+  require_executable jq
+  [[ -r "$CONFIG_FILE" ]] ||
+    die 2 "Configuration file '${CONFIG_FILE}' is missing or unreadable."
+
+  config_json=$(jq -c . "$CONFIG_FILE" 2>/dev/null) ||
+    die 2 "Configuration file '${CONFIG_FILE}' is not valid JSON."
+
+  config_field_valid '.browser.command | type == "string" and length > 0' ||
+    die 2 "Invalid configuration field 'browser.command': expected a non-empty executable name or path."
+  config_field_valid '.browser.profileDirectory | type == "string" and length > 0' ||
+    die 2 "Invalid configuration field 'browser.profileDirectory': expected a non-empty string."
+  config_field_valid '.panel.widthRatio | type == "number" and . > 0 and . <= 1' ||
+    die 2 "Invalid configuration field 'panel.widthRatio': expected a number greater than 0 and at most 1."
+  config_field_valid '.panel.heightRatio | type == "number" and . > 0 and . <= 1' ||
+    die 2 "Invalid configuration field 'panel.heightRatio': expected a number greater than 0 and at most 1."
+  config_field_valid '.panel.edgeGap | type == "number" and . >= 0' ||
+    die 2 "Invalid configuration field 'panel.edgeGap': expected a non-negative number."
+  config_field_valid '.providers | type == "object" and (keys | sort) == ["chatgpt", "claude"]' ||
+    die 2 "Invalid configuration field 'providers': exactly 'chatgpt' and 'claude' are required."
+
+  local provider field
+  for provider in chatgpt claude; do
+    for field in name appUrl historyUrl windowClass workspace; do
+      config_field_valid \
+        ".providers[\"${provider}\"].${field} | type == \"string\" and length > 0" ||
+        die 2 "Invalid configuration field 'providers.${provider}.${field}': expected a non-empty string."
+    done
+    config_field_valid ".providers[\"${provider}\"].appUrl | startswith(\"https://\")" ||
+      die 2 "Invalid configuration field 'providers.${provider}.appUrl': expected an HTTPS URL."
+    config_field_valid ".providers[\"${provider}\"].historyUrl | startswith(\"https://\")" ||
+      die 2 "Invalid configuration field 'providers.${provider}.historyUrl': expected an HTTPS URL."
+    config_field_valid ".providers[\"${provider}\"].windowClass | test(\"^[A-Za-z0-9._-]+$\")" ||
+      die 2 "Invalid configuration field 'providers.${provider}.windowClass': use only letters, digits, dot, underscore, or hyphen."
+    config_field_valid ".providers[\"${provider}\"].workspace | test(\"^[A-Za-z0-9._-]+$\")" ||
+      die 2 "Invalid configuration field 'providers.${provider}.workspace': use only letters, digits, dot, underscore, or hyphen."
+  done
+
+  browser_command=$(jq -r '.browser.command' <<<"$config_json")
+  browser_profile=$(jq -r '.browser.profileDirectory' <<<"$config_json")
+  browser_executable=$(resolve_executable "$browser_command") ||
+    die 3 "Configured browser executable '${browser_command}' is unavailable; install it or correct 'browser.command'."
+}
+
+validate_provider() {
+  case "${1:-}" in
+    chatgpt|claude) return 0 ;;
+    *) die 2 "Unknown provider '${1:-}'; expected 'chatgpt' or 'claude'." ;;
+  esac
+}
+
+provider_value() {
+  local provider=$1
+  local field=$2
+  jq -r --arg provider "$provider" --arg field "$field" \
+    '.providers[$provider][$field]' <<<"$config_json"
+}
+
+fresh_state() {
+  jq -cn '{
+    lastProvider: "chatgpt",
+    providers: {
+      chatgpt: {address: "", pid: 0, lastSeen: 0},
+      claude: {address: "", pid: 0, lastSeen: 0}
+    }
+  }'
+}
+
+load_state() {
+  if [[ -r "$STATE_FILE" ]] &&
+    jq -e '
+      (.lastProvider == "chatgpt" or .lastProvider == "claude") and
+      (.providers | type == "object") and
+      all(.providers.chatgpt, .providers.claude;
+        (.address | type == "string") and
+        (.pid | type == "number") and
+        (.lastSeen | type == "number"))
+    ' "$STATE_FILE" >/dev/null 2>&1; then
+    state_json=$(jq -c . "$STATE_FILE")
+  else
+    state_json=$(fresh_state)
+  fi
+}
+
+save_state() {
+  local temporary
+  temporary=$(mktemp "${STATE_DIR}/.state.json.XXXXXX") ||
+    die 5 "Unable to create a temporary runtime-state file in '${STATE_DIR}'."
+  if ! printf '%s\n' "$state_json" >"$temporary"; then
+    rm -f -- "$temporary"
+    die 5 "Unable to write runtime state in '${STATE_DIR}'."
+  fi
+  chmod 600 "$temporary"
+  if ! mv -f -- "$temporary" "$STATE_FILE"; then
+    rm -f -- "$temporary"
+    die 5 "Unable to replace runtime state '${STATE_FILE}'."
+  fi
+}
+
+query_clients() {
+  local output
+  if ! output=$(hyprctl clients -j 2>&1); then
+    error "Hyprland client query failed: ${output}"
+    return 1
+  fi
+  if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$output"; then
+    error "Hyprland returned malformed client JSON."
+    return 1
+  fi
+  clients_json=$output
+}
+
+query_monitors() {
+  local output
+  if ! output=$(hyprctl monitors -j 2>&1); then
+    error "Hyprland monitor query failed: ${output}"
+    return 1
+  fi
+  if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$output"; then
+    error "Hyprland returned malformed monitor JSON."
+    return 1
+  fi
+  monitors_json=$output
+}
+
+client_pid_for_address() {
+  local address=$1
+  jq -r --arg address "$address" \
+    'first(.[] | select(.address == $address) | .pid) // 0' <<<"$clients_json"
+}
+
+client_is_configured_browser() {
+  local address=$1
+  local pid class initial_class process_executable
+
+  pid=$(client_pid_for_address "$address")
+  [[ "$pid" =~ ^[0-9]+$ ]] && ((pid > 0)) || return 1
+  class=$(jq -r --arg address "$address" \
+    'first(.[] | select(.address == $address) | .class) // ""' \
+    <<<"$clients_json")
+  initial_class=$(jq -r --arg address "$address" \
+    'first(.[] | select(.address == $address) | .initialClass) // ""' \
+    <<<"$clients_json")
+
+  if [[ "${class,,}" == *chromium* ||
+    "${class,,}" == *chrome* ||
+    "${initial_class,,}" == *chromium* ||
+    "${initial_class,,}" == *chrome* ]]; then
+    return 0
+  fi
+
+  process_executable=$(readlink -f -- "/proc/${pid}/exe" 2>/dev/null) || return 1
+  [[ "$process_executable" == "$browser_executable" ||
+    "$(basename -- "$process_executable")" == *chromium* ||
+    "$(basename -- "$process_executable")" == *helium* ]]
+}
+
+refresh_state_from_clients() {
+  local provider address pid now
+  now=$(date +%s)
+
+  for provider in chatgpt claude; do
+    address=$(jq -r --arg provider "$provider" \
+      '.providers[$provider].address // ""' <<<"$state_json")
+    pid=0
+    if [[ "$address" =~ ^0x[0-9A-Fa-f]+$ ]]; then
+      pid=$(client_pid_for_address "$address")
+    fi
+
+    if client_is_configured_browser "$address"; then
+      state_json=$(jq -c \
+        --arg provider "$provider" \
+        --argjson pid "$pid" \
+        --argjson now "$now" \
+        '.providers[$provider].pid = $pid |
+         .providers[$provider].lastSeen = $now' <<<"$state_json")
+    else
+      state_json=$(jq -c \
+        --arg provider "$provider" \
+        '.providers[$provider] = {address: "", pid: 0, lastSeen: 0}' \
+        <<<"$state_json")
+    fi
+  done
+}
+
+lua_quote() {
+  jq -Rn --arg value "$1" '$value'
+}
+
+hypr_dispatch() {
+  local expression=$1
+  local description=$2
+  local output
+  if ! output=$(hyprctl dispatch "$expression" 2>&1); then
+    error "Hyprland failed to ${description}: ${output}"
+    return 1
+  fi
+}
+
+focused_monitor_name() {
+  jq -r 'first(.[] | select(.focused == true) | .name) // ""' <<<"$monitors_json"
+}
+
+visible_monitor_for_workspace() {
+  local workspace=$1
+  jq -r --arg workspace "special:${workspace}" \
+    'first(.[] | select(.specialWorkspace.name == $workspace) | .name) // ""' \
+    <<<"$monitors_json"
+}
+
+focus_monitor() {
+  local monitor=$1
+  local quoted
+  quoted=$(lua_quote "$monitor")
+  hypr_dispatch "hl.dsp.focus({ monitor = ${quoted} })" \
+    "focus monitor '${monitor}'"
+}
+
+hide_workspace_if_visible() {
+  local workspace=$1
+  local restore_monitor=$2
+  local host workspace_quoted
+
+  query_monitors || return 1
+  host=$(visible_monitor_for_workspace "$workspace")
+  [[ -n "$host" ]] || return 0
+
+  if [[ "$host" != "$(focused_monitor_name)" ]]; then
+    focus_monitor "$host" || return 1
+  fi
+
+  workspace_quoted=$(lua_quote "$workspace")
+  hypr_dispatch "hl.dsp.workspace.toggle_special(${workspace_quoted})" \
+    "hide special workspace '${workspace}'" || return 1
+
+  if [[ -n "$restore_monitor" && "$restore_monitor" != "$host" ]]; then
+    focus_monitor "$restore_monitor" || return 1
+  fi
+}
+
+discover_launched_window() {
+  local before_json=$1
+  local provider=$2
+  local expected_class provider_name current candidate_address candidate_pid
+  local attempt
+
+  expected_class=$(provider_value "$provider" windowClass)
+  provider_name=$(provider_value "$provider" name)
+  discovered_address=""
+  discovered_pid=0
+
+  for ((attempt = 0; attempt < DISCOVERY_ATTEMPTS; attempt++)); do
+    if ! query_clients; then
+      sleep "$DISCOVERY_DELAY"
+      continue
+    fi
+    current=$clients_json
+
+    while IFS=$'\t' read -r candidate_address candidate_pid; do
+      [[ -n "$candidate_address" ]] || continue
+      if client_is_configured_browser "$candidate_address"; then
+        discovered_address=$candidate_address
+        discovered_pid=$candidate_pid
+        return 0
+      fi
+    done < <(
+      jq -r \
+        --arg expectedClass "$expected_class" \
+        --argjson before "$before_json" '
+          .[] as $client |
+          select(($before | map(.address) | index($client.address)) == null) |
+          select($client.class == $expectedClass or
+                 $client.initialClass == $expectedClass) |
+          [$client.address, ($client.pid | tostring)] | @tsv
+        ' <<<"$current"
+    )
+
+    while IFS=$'\t' read -r candidate_address candidate_pid; do
+      [[ -n "$candidate_address" ]] || continue
+      if client_is_configured_browser "$candidate_address"; then
+        discovered_address=$candidate_address
+        discovered_pid=$candidate_pid
+        return 0
+      fi
+    done < <(
+      jq -r \
+        --arg providerName "$provider_name" \
+        --argjson before "$before_json" '
+          .[] as $client |
+          select(($before | map(.address) | index($client.address)) == null) |
+          select((($client.title // "") | test($providerName; "i")) or
+                 (($client.initialTitle // "") | test($providerName; "i"))) |
+          [$client.address, ($client.pid | tostring)] | @tsv
+        ' <<<"$current"
+    )
+
+    if ((attempt + 1 < DISCOVERY_ATTEMPTS)); then
+      sleep "$DISCOVERY_DELAY"
+    fi
+  done
+
+  return 1
+}
+
+launch_provider() {
+  local provider=$1
+  local app_url window_class before_json now
+  local -a browser_argv
+
+  require_executable setsid
+  require_executable uwsm-app
+  query_clients || die 5 "Unable to capture existing Hyprland clients before launching the configured browser."
+  before_json=$clients_json
+  app_url=$(provider_value "$provider" appUrl)
+  window_class=$(provider_value "$provider" windowClass)
+  browser_argv=(
+    "$browser_executable"
+    "--profile-directory=${browser_profile}"
+    --no-first-run
+    "--app=${app_url}"
+    "--class=${window_class}"
+  )
+
+  setsid uwsm-app -- "${browser_argv[@]}" 9>&- >/dev/null 2>&1 &
+
+  if ! discover_launched_window "$before_json" "$provider"; then
+    die 4 "Timed out after eight seconds while discovering the new $(provider_value "$provider" name) browser window; it was left untouched."
+  fi
+
+  now=$(date +%s)
+  state_json=$(jq -c \
+    --arg provider "$provider" \
+    --arg address "$discovered_address" \
+    --argjson pid "$discovered_pid" \
+    --argjson now "$now" \
+    '.providers[$provider] = {
+       address: $address,
+       pid: $pid,
+       lastSeen: $now
+     }' <<<"$state_json")
+  save_state
+}
+
+place_provider() {
+  local provider=$1
+  local target_monitor=$2
+  local address workspace width_ratio height_ratio edge_gap
+  local monitor_quoted selector_quoted workspace_quoted
+  local width height x y metrics
+
+  address=$(jq -r --arg provider "$provider" \
+    '.providers[$provider].address' <<<"$state_json")
+  workspace=$(provider_value "$provider" workspace)
+  width_ratio=$(jq -r '.panel.widthRatio' <<<"$config_json")
+  height_ratio=$(jq -r '.panel.heightRatio' <<<"$config_json")
+  edge_gap=$(jq -r '.panel.edgeGap' <<<"$config_json")
+
+  [[ "$address" =~ ^0x[0-9A-Fa-f]+$ ]] ||
+    die 5 "Managed address for '${provider}' is invalid; close its window and try again."
+
+  metrics=$(jq -r \
+    --arg monitor "$target_monitor" \
+    --argjson widthRatio "$width_ratio" \
+    --argjson heightRatio "$height_ratio" \
+    --argjson edgeGap "$edge_gap" '
+      first(.[] | select(.name == $monitor)) as $monitor |
+      if $monitor == null then empty else
+        ($monitor.width / $monitor.scale) as $monitorWidth |
+        ($monitor.height / $monitor.scale) as $monitorHeight |
+        (($monitorWidth * $widthRatio) | round) as $windowWidth |
+        (($monitorHeight * $heightRatio) | round) as $windowHeight |
+        [
+          $windowWidth,
+          $windowHeight,
+          ($edgeGap | round),
+          ((($monitorHeight - $windowHeight) / 2) | round)
+        ] | @tsv
+      end
+    ' <<<"$monitors_json")
+  [[ -n "$metrics" ]] ||
+    die 5 "Focused monitor '${target_monitor}' disappeared before the window could be placed."
+  IFS=$'\t' read -r width height x y <<<"$metrics"
+
+  monitor_quoted=$(lua_quote "$target_monitor")
+  selector_quoted=$(lua_quote "address:${address}")
+  workspace_quoted=$(lua_quote "special:${workspace}")
+
+  hypr_dispatch \
+    "hl.dsp.window.float({ action = \"set\", window = ${selector_quoted} })" \
+    "float the '${provider}' window" || die 5 "Address-targeted float operation failed."
+  hypr_dispatch \
+    "hl.dsp.window.move({ monitor = ${monitor_quoted}, follow = false, window = ${selector_quoted} })" \
+    "move the '${provider}' window to monitor '${target_monitor}'" ||
+    die 5 "Address-targeted monitor move failed."
+  hypr_dispatch \
+    "hl.dsp.window.move({ workspace = ${workspace_quoted}, follow = false, window = ${selector_quoted} })" \
+    "move the '${provider}' window to '${workspace}'" ||
+    die 5 "Address-targeted workspace move failed."
+  hypr_dispatch \
+    "hl.dsp.window.resize({ x = ${width}, y = ${height}, window = ${selector_quoted} })" \
+    "resize the '${provider}' window" || die 5 "Address-targeted resize failed."
+  hypr_dispatch \
+    "hl.dsp.window.move({ x = ${x}, y = ${y}, window = ${selector_quoted} })" \
+    "position the '${provider}' window" || die 5 "Address-targeted position failed."
+}
+
+show_provider() {
+  local provider=$1
+  local other target_monitor address workspace visible_monitor selector_quoted workspace_quoted now
+
+  other=chatgpt
+  [[ "$provider" == "chatgpt" ]] && other=claude
+
+  query_clients || die 5 "Unable to query Hyprland clients."
+  query_monitors || die 5 "Unable to query Hyprland monitors."
+  refresh_state_from_clients
+  save_state
+
+  target_monitor=$(focused_monitor_name)
+  [[ -n "$target_monitor" ]] ||
+    die 5 "Hyprland did not report a focused monitor."
+
+  hide_workspace_if_visible "$(provider_value "$other" workspace)" "$target_monitor" ||
+    die 5 "Unable to hide the other provider scratchpad."
+
+  address=$(jq -r --arg provider "$provider" \
+    '.providers[$provider].address' <<<"$state_json")
+  if [[ -z "$address" ]]; then
+    launch_provider "$provider"
+    query_monitors || die 5 "Unable to refresh monitor state after launching the browser."
+  fi
+
+  workspace=$(provider_value "$provider" workspace)
+  visible_monitor=$(visible_monitor_for_workspace "$workspace")
+  if [[ -n "$visible_monitor" && "$visible_monitor" != "$target_monitor" ]]; then
+    hide_workspace_if_visible "$workspace" "$target_monitor" ||
+      die 5 "Unable to move the provider scratchpad from '${visible_monitor}'."
+    query_monitors || die 5 "Unable to refresh monitor state."
+  fi
+
+  place_provider "$provider" "$target_monitor"
+  query_monitors || die 5 "Unable to refresh monitor state after placing the window."
+  visible_monitor=$(visible_monitor_for_workspace "$workspace")
+  if [[ -z "$visible_monitor" ]]; then
+    workspace_quoted=$(lua_quote "$workspace")
+    hypr_dispatch "hl.dsp.workspace.toggle_special(${workspace_quoted})" \
+      "reveal special workspace '${workspace}'" ||
+      die 5 "Unable to reveal the '${provider}' scratchpad."
+  fi
+
+  address=$(jq -r --arg provider "$provider" \
+    '.providers[$provider].address' <<<"$state_json")
+  selector_quoted=$(lua_quote "address:${address}")
+  hypr_dispatch "hl.dsp.focus({ window = ${selector_quoted} })" \
+    "focus the '${provider}' window" ||
+    die 5 "Unable to focus the '${provider}' scratchpad."
+
+  now=$(date +%s)
+  state_json=$(jq -c \
+    --arg provider "$provider" \
+    --argjson now "$now" \
+    '.lastProvider = $provider |
+     .providers[$provider].lastSeen = $now' <<<"$state_json")
+  save_state
+}
+
+toggle_provider() {
+  local provider=$1
+  local workspace target_monitor visible_monitor
+
+  query_clients || die 5 "Unable to query Hyprland clients."
+  query_monitors || die 5 "Unable to query Hyprland monitors."
+  refresh_state_from_clients
+  save_state
+
+  workspace=$(provider_value "$provider" workspace)
+  target_monitor=$(focused_monitor_name)
+  visible_monitor=$(visible_monitor_for_workspace "$workspace")
+  if [[ -n "$visible_monitor" ]]; then
+    hide_workspace_if_visible "$workspace" "$target_monitor" ||
+      die 5 "Unable to hide the '${provider}' scratchpad."
+    state_json=$(jq -c --arg provider "$provider" \
+      '.lastProvider = $provider' <<<"$state_json")
+    save_state
+  else
+    show_provider "$provider"
+  fi
+}
+
+hide_provider() {
+  local provider=$1
+  local restore_monitor=""
+
+  query_monitors || die 5 "Unable to query Hyprland monitors."
+  restore_monitor=$(focused_monitor_name)
+  hide_workspace_if_visible "$(provider_value "$provider" workspace)" "$restore_monitor" ||
+    die 5 "Unable to hide the '${provider}' scratchpad."
+}
+
+hide_all() {
+  local restore_monitor
+
+  query_monitors || die 5 "Unable to query Hyprland monitors."
+  restore_monitor=$(focused_monitor_name)
+  hide_workspace_if_visible "$(provider_value chatgpt workspace)" "$restore_monitor" ||
+    die 5 "Unable to hide the ChatGPT scratchpad."
+  hide_workspace_if_visible "$(provider_value claude workspace)" "$restore_monitor" ||
+    die 5 "Unable to hide the Claude scratchpad."
+}
+
+provider_state() {
+  local provider=$1
+  local address workspace
+  address=$(jq -r --arg provider "$provider" \
+    '.providers[$provider].address' <<<"$state_json")
+  if [[ -z "$address" ]]; then
+    printf 'closed\n'
+    return
+  fi
+
+  workspace=$(provider_value "$provider" workspace)
+  if [[ -n "$(visible_monitor_for_workspace "$workspace")" ]]; then
+    printf 'visible\n'
+  else
+    printf 'hidden\n'
+  fi
+}
+
+status_json() {
+  local chatgpt_state claude_state chatgpt_address claude_address
+  query_clients || return 1
+  query_monitors || return 1
+  refresh_state_from_clients
+  save_state
+
+  chatgpt_state=$(provider_state chatgpt)
+  claude_state=$(provider_state claude)
+  chatgpt_address=$(jq -r '.providers.chatgpt.address' <<<"$state_json")
+  claude_address=$(jq -r '.providers.claude.address' <<<"$state_json")
+
+  jq -cn \
+    --arg lastProvider "$(jq -r '.lastProvider' <<<"$state_json")" \
+    --arg chatgptState "$chatgpt_state" \
+    --arg chatgptAddress "$chatgpt_address" \
+    --arg claudeState "$claude_state" \
+    --arg claudeAddress "$claude_address" '{
+      lastProvider: $lastProvider,
+      providers: {
+        chatgpt: {state: $chatgptState, address: $chatgptAddress},
+        claude: {state: $claudeState, address: $claudeAddress}
+      },
+      error: ""
+    }'
+}
+
+emit_status_error_json() {
+  local message=$1
+  jq -cn --arg message "$message" '{
+    lastProvider: "chatgpt",
+    providers: {
+      chatgpt: {state: "closed", address: ""},
+      claude: {state: "closed", address: ""}
+    },
+    error: $message
+  }'
+}
+
+open_history() {
+  local provider=$1
+  local history_url
+  require_executable xdg-open
+  history_url=$(provider_value "$provider" historyUrl)
+  if ! xdg-open "$history_url" >/dev/null 2>&1; then
+    die 3 "The default browser could not open $(provider_value "$provider" name) history at '${history_url}'."
+  fi
+}
+
+main() {
+  local command=${1:-}
+  local provider target output json_output=false
+
+  [[ -n "$command" ]] || {
+    usage
+    exit 2
+  }
+  shift
+
+  load_and_validate_config
+  require_executable hyprctl
+
+  mkdir -p -- "$STATE_DIR" ||
+    die 5 "Unable to create runtime-state directory '${STATE_DIR}'."
+  chmod 700 "$STATE_DIR"
+  exec 9>"$LOCK_FILE" ||
+    die 5 "Unable to open controller lock '${LOCK_FILE}'."
+  flock -x 9 ||
+    die 5 "Unable to acquire controller lock '${LOCK_FILE}'."
+  load_state
+
+  case "$command" in
+    toggle)
+      [[ $# -eq 1 ]] || {
+        usage
+        exit 2
+      }
+      provider=$1
+      validate_provider "$provider"
+      toggle_provider "$provider"
+      ;;
+    show)
+      [[ $# -eq 1 ]] || {
+        usage
+        exit 2
+      }
+      provider=$1
+      validate_provider "$provider"
+      show_provider "$provider"
+      ;;
+    hide)
+      [[ $# -eq 1 ]] || {
+        usage
+        exit 2
+      }
+      target=$1
+      case "$target" in
+        all) hide_all ;;
+        chatgpt|claude) hide_provider "$target" ;;
+        *) die 2 "Unknown hide target '${target}'; expected 'chatgpt', 'claude', or 'all'." ;;
+      esac
+      ;;
+    status)
+      target=all
+      while (($# > 0)); do
+        case "$1" in
+          --json) json_output=true ;;
+          chatgpt|claude|all) target=$1 ;;
+          *) die 2 "Unknown status argument '$1'; expected a provider, 'all', or '--json'." ;;
+        esac
+        shift
+      done
+
+      if ! output=$(status_json); then
+        if [[ "$json_output" == true ]]; then
+          emit_status_error_json "Unable to query Hyprland status; see stderr for details."
+        fi
+        exit 5
+      fi
+
+      if [[ "$json_output" == true ]]; then
+        printf '%s\n' "$output"
+      elif [[ "$target" == "all" ]]; then
+        jq -r '
+          "ChatGPT: \(.providers.chatgpt.state)\n" +
+          "Claude: \(.providers.claude.state)\n" +
+          "Last used: \(.lastProvider)"
+        ' <<<"$output"
+      else
+        jq -r --arg provider "$target" '.providers[$provider].state' <<<"$output"
+      fi
+      ;;
+    open-history)
+      [[ $# -eq 1 ]] || {
+        usage
+        exit 2
+      }
+      provider=$1
+      validate_provider "$provider"
+      open_history "$provider"
+      ;;
+    *)
+      usage
+      die 2 "Unknown command '${command}'."
+      ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {"id":"laptop-monitors","source":"profiles/parm-laptop/home/.config/hypr/monitors.lua","destination":".config/hypr/monitors.lua","mode":"0644","capture":true,"generated":false},
+    {"id":"laptop-bindings","source":"profiles/parm-laptop/home/.config/hypr/profile.lua","destination":".config/hypr/profile.lua","mode":"0644","capture":true,"generated":false},
+    {"id":"laptop-marker","source":"profiles/parm-laptop/home/.config/parm/profiles/parm-laptop","destination":".config/parm/profiles/parm-laptop","mode":"0644","capture":false,"generated":false}
+  ]
+}
